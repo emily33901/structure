@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use egui::{ahash::HashMap, RichText};
 
 use crate::{
-    process::{Process, Section},
+    process::{OpenProcess, Section},
     registry::Registry,
     AddressResponse,
 };
@@ -81,12 +81,12 @@ pub(crate) fn disect_bytes(
 const MEMORY_PAGE_LEN: usize = 4096;
 
 pub(crate) struct Memory<'a> {
-    process: &'a Process,
+    process: &'a OpenProcess,
     pages: HashMap<usize, Vec<u8>>,
 }
 
 impl<'a> Memory<'a> {
-    pub(crate) fn new(process: &'a Process) -> Self {
+    pub(crate) fn new(process: &'a OpenProcess) -> Self {
         Self {
             process: process,
             pages: Default::default(),

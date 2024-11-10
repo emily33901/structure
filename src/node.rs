@@ -6,7 +6,7 @@ use rand::{distributions::Alphanumeric, Rng};
 
 use crate::{
     memory::{self, Memory},
-    process::{Process, Section},
+    process::{OpenProcess, Section},
     registry::{Registry, RegistryId},
     Address, AddressResponse,
 };
@@ -462,6 +462,12 @@ impl Struct {
                         if ui.button(format!("{name} ({id})")).clicked() {
                             response = Some(AddressResponse::Replace(s.clone()))
                         }
+                    }
+
+                    ui.separator();
+
+                    if ui.button(format!("New struct")).clicked() {
+                        response = Some(AddressResponse::Replace(registry.default_struct()))
                     }
                 });
 

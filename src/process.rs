@@ -1,5 +1,5 @@
 use std::{
-    ffi::c_void,
+    ffi::{c_void, OsStr},
     mem::{offset_of, MaybeUninit},
 };
 
@@ -8,22 +8,23 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, STATUS_SUCCESS},
         System::{
-            Diagnostics::Debug::ReadProcessMemory,
+            Diagnostics::{
+                Debug::ReadProcessMemory,
+                ToolHelp::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS},
+            },
             Kernel::LIST_ENTRY,
             Memory::{
                 VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_IMAGE, MEM_MAPPED,
                 MEM_PRIVATE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
                 PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
             },
-            Threading::{
-                OpenProcess, PEB, PEB_LDR_DATA, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION,
-            },
+            Threading::{self, PEB, PEB_LDR_DATA, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
             WindowsProgramming::LDR_DATA_TABLE_ENTRY,
         },
     },
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 pub(crate) struct Module {
     address: usize,
@@ -68,12 +69,12 @@ pub(crate) struct Section {
     guard: bool,
 }
 
-pub(crate) struct Process(HANDLE);
+pub(crate) struct OpenProcess(HANDLE);
 
-impl Process {
+impl OpenProcess {
     pub(crate) fn new(pid: u32) -> Result<Self> {
         unsafe {
-            let handle = OpenProcess(PROCESS_ALL_ACCESS, false, pid as u32)?;
+            let handle = Threading::OpenProcess(PROCESS_ALL_ACCESS, false, pid as u32)?;
 
             eprintln!("process handle is {handle:?}");
 
@@ -232,10 +233,41 @@ impl Process {
         Ok(sections)
     }
 }
-impl Drop for Process {
+impl Drop for OpenProcess {
     fn drop(&mut self) {
         unsafe {
             let _ = CloseHandle(self.0);
         };
     }
+}
+
+pub(crate) struct Process {
+    pub(crate) pid: u32,
+    pub(crate) name: String,
+}
+
+pub(crate) fn processes() -> Result<Vec<Process>> {
+    let snapshot = unsafe {
+        windows::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot(
+            TH32CS_SNAPPROCESS,
+            0,
+        )
+    }?;
+
+    let mut pe = PROCESSENTRY32W::default();
+    pe.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+    let mut processes = vec![];
+
+    let mut okay = unsafe { Process32FirstW(snapshot, &mut pe) };
+    while okay.is_ok() {
+        processes.push(Process {
+            name: String::from_utf16_lossy(&pe.szExeFile),
+            pid: pe.th32ProcessID,
+        });
+
+        okay = unsafe { Process32NextW(snapshot, &mut pe) };
+    }
+
+    Ok(processes)
 }
