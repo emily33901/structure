@@ -10,12 +10,15 @@ use egui_tiles::{Container, Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, OpenProcess, Section};
+use project::Project;
 use registry::Registry;
 
 mod memory;
 mod node;
 mod process;
+mod project;
 mod registry;
+mod storage;
 
 #[derive(Debug)]
 struct Address(String, usize);
@@ -289,7 +292,7 @@ impl Pane {
         egui_extras::TableBuilder::new(ui)
             .max_scroll_height(max_height)
             .sense(egui::Sense::click())
-            .column(Column::auto().at_least(10.0))
+            .column(Column::auto().at_least(20.0))
             .column(Column::auto().at_least(150.0))
             .column(Column::remainder())
             .header(20.0, |mut header| {
@@ -527,7 +530,7 @@ struct App {
     pid: Option<u32>,
     process: Option<OpenProcess>,
 
-    registry: crate::registry::Registry,
+    project: Project,
     sections: Option<Vec<Section>>,
     modules: Option<Vec<Module>>,
 
@@ -542,11 +545,13 @@ impl Default for App {
         let mut registry = Registry::default();
         let default_pane = registry.default_pane();
 
+        let project = Project::new(registry);
+
         Self {
             pid_str: Default::default(),
             pid: Default::default(),
             process: Default::default(),
-            registry: registry,
+            project,
             sections: Default::default(),
             modules: Default::default(),
             test: Default::default(),
@@ -575,7 +580,7 @@ impl Default for App {
 
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
-        eprintln!("darwin");
+        eprintln!("structure");
         let mut zelf = Self {
             pid: None,
             ..Default::default()
@@ -622,11 +627,23 @@ impl eframe::App for App {
             self.sections = process.sections().ok();
         }
 
-        self.registry.frame();
+        self.project.registry.frame();
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Save").clicked() {
+                        storage::save_to_disk(&self.project, std::path::Path::new("project.json"))
+                            .unwrap();
+                    }
+                    if ui.button("Load").clicked() {
+                        self.project =
+                            storage::load_from_disk(std::path::Path::new("project.json")).unwrap();
+                    }
+                })
+            });
             // The central panel the region left after adding TopPanel's and SidePanel's
-            ui.heading("Darwin");
+            ui.heading("Structure");
             ui.separator();
 
             if ui.text_edit_singleline(&mut self.pid_str).changed() {
@@ -640,7 +657,7 @@ impl eframe::App for App {
                     process,
                     sections: self.sections.as_ref().map(|x| x.as_slice()),
                     test: &self.test,
-                    registry: &mut self.registry,
+                    registry: &mut self.project.registry,
                 };
 
                 self.tree.ui(&mut behavior, ui);
@@ -648,9 +665,9 @@ impl eframe::App for App {
                 if let Some((parent, add_child)) = behavior.options.add_child.take() {
                     let new_child = self.tree.tiles.insert_pane(match add_child {
                         AddChild::AddressStruct(s, address) => {
-                            let s = s.unwrap_or_else(|| self.registry.default_struct());
+                            let s = s.unwrap_or_else(|| self.project.registry.default_struct());
                             let address =
-                                address.unwrap_or_else(|| self.registry.default_address());
+                                address.unwrap_or_else(|| self.project.registry.default_address());
 
                             Pane::AddressStruct(s, address)
                         }
@@ -689,7 +706,7 @@ impl eframe::App for App {
 fn main() {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Darwin Memory Disector",
+        "Structure memory dissector",
         native_options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )

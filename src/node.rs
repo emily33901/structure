@@ -2,7 +2,6 @@ use core::f32;
 use std::{cell::RefCell, rc::Rc};
 
 use egui::{ahash::HashMap, vec2, RichText};
-use rand::{distributions::Alphanumeric, Rng};
 
 use crate::{
     memory::{self, Memory},
@@ -14,7 +13,7 @@ use crate::{
 // TODO(emily): Need some way to collapse the view of Struct or Pointer
 // either do this here or in Struct::nodes
 #[derive(Debug)]
-enum Node {
+pub(crate) enum Node {
     U8,
     U16,
     U32,
@@ -38,7 +37,11 @@ impl Node {
             Node::U16 => 2,
             Node::U8 => 1,
             Node::Pointer(_) => 8,
-            Node::Struct(s) => s.borrow().byte_size(),
+            Node::Struct(s) => {
+                let size = s.borrow().byte_size();
+                assert_ne!(size, 0);
+                size
+            }
         }
     }
 
@@ -178,19 +181,7 @@ impl Node {
             .allocate_ui_with_layout(
                 vec2(ui.available_width(), height),
                 egui::Layout::left_to_right(egui::Align::Min),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        self.node_ui_inner(
-                            ui,
-                            registry,
-                            memory,
-                            address,
-                            offset_in_parent,
-                            sections,
-                        )
-                    })
-                    .inner
-                },
+                |ui| self.node_ui_inner(ui, registry, memory, address, offset_in_parent, sections),
             )
             .inner;
 
@@ -399,15 +390,15 @@ pub(crate) struct StructUiFlags {
 
 #[derive(Debug)]
 pub(crate) struct Struct {
-    size: usize,
-    nodes: HashMap<usize, RefCell<Node>>,
+    pub(crate) size: usize,
+    pub(crate) nodes: HashMap<usize, RefCell<Node>>,
     pub(crate) name: String,
 }
 
 impl Default for Struct {
     fn default() -> Self {
         Self {
-            size: Default::default(),
+            size: 64,
             nodes: Default::default(),
             name: "Default struct".into(),
         }

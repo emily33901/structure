@@ -1,3 +1,6 @@
+use serde::Deserialize;
+use serde::Serialize;
+
 use super::Address;
 use super::Pane;
 use crate::node::Struct;
@@ -5,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Hash, PartialEq, Eq, Copy, Clone)]
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
 pub(crate) struct RegistryId(pub usize);
 
 impl std::fmt::Display for RegistryId {
@@ -23,7 +26,7 @@ pub(crate) struct Registry {
     pub(crate) structs_by_name: HashMap<RegistryId, (String, Rc<RefCell<Struct>>)>,
     pub(crate) addresses_by_name: HashMap<RegistryId, (String, Rc<RefCell<Address>>)>,
 
-    dirty: bool,
+    pub(crate) dirty: bool,
 }
 
 impl Registry {
@@ -88,6 +91,26 @@ impl Registry {
                     .insert(id.clone(), (address.borrow().0.clone(), address.clone()));
             }
         }
+    }
+
+    pub(crate) fn struct_id(&self, s: &Rc<RefCell<Struct>>) -> Option<RegistryId> {
+        for (id, other_s) in &self.structs {
+            if Rc::ptr_eq(s, other_s) {
+                return Some(*id);
+            }
+        }
+
+        None
+    }
+
+    pub(crate) fn address_id(&self, address: &Rc<RefCell<Address>>) -> Option<RegistryId> {
+        for (id, other_address) in &self.addresses {
+            if Rc::ptr_eq(address, other_address) {
+                Some(id);
+            }
+        }
+
+        None
     }
 
     pub(crate) fn mark_diry(&mut self) {

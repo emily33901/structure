@@ -506,28 +506,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96a6ac251f4a2aca6b3f91340350eab87ae57c3f127ffeb585e92bd336717991"
 
 [[package]]
-name = "darwin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "derive_more",
- "eframe",
- "egui",
- "egui_extras",
- "egui_tiles",
- "iced-x86",
- "parking_lot",
- "rand",
- "rodio",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "windows 0.58.0",
-]
-
-[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2145,6 +2123,28 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "structure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "egui_tiles",
+ "iced-x86",
+ "parking_lot",
+ "rand",
+ "rodio",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.58.0",
+]
 
 [[package]]
 name = "symphonia"
