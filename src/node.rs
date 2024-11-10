@@ -11,6 +11,8 @@ use crate::{
     Address, AddressResponse,
 };
 
+// TODO(emily): Need some way to collapse the view of Struct or Pointer
+// either do this here or in Struct::nodes
 #[derive(Debug)]
 enum Node {
     U8,
@@ -48,6 +50,124 @@ impl Node {
         }
     }
 
+    fn node_ui_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        registry: &mut Registry,
+        memory: &mut Memory<'_>,
+        address: usize,
+        offset_in_parent: usize,
+        sections: Option<&[Section]>,
+        test: &crate::Test,
+    ) -> (usize, Option<AddressResponse>) {
+        let (bytes, response) = match self {
+            Node::U64 => {
+                ui.label("U64");
+
+                Node::none_ui(
+                    ui,
+                    registry,
+                    memory,
+                    address,
+                    offset_in_parent,
+                    Some(8),
+                    sections,
+                    test,
+                )
+            }
+            Node::U32 => {
+                ui.label("U32");
+
+                Node::none_ui(
+                    ui,
+                    registry,
+                    memory,
+                    address,
+                    offset_in_parent,
+                    Some(4),
+                    sections,
+                    test,
+                )
+            }
+            Node::U16 => {
+                ui.label("U16");
+
+                Node::none_ui(
+                    ui,
+                    registry,
+                    memory,
+                    address,
+                    offset_in_parent,
+                    Some(2),
+                    sections,
+                    test,
+                )
+            }
+            Node::U8 => {
+                ui.label("U8");
+
+                Node::none_ui(
+                    ui,
+                    registry,
+                    memory,
+                    address,
+                    offset_in_parent,
+                    Some(1),
+                    sections,
+                    test,
+                )
+            }
+            // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
+            // Don't just copy paste it.
+            Node::Struct(s) => {
+                ui.label("S");
+
+                s.clone().borrow().ui(
+                    s.clone(),
+                    StructUiFlags::default(),
+                    ui,
+                    registry,
+                    memory,
+                    address,
+                    sections,
+                    test,
+                )
+            }
+            Node::Pointer(s) => {
+                ui.label("P");
+
+                let mut buffer = [0; 8];
+                memory.get(address, &mut buffer);
+                let address = memory::interpret_as(&buffer);
+
+                s.borrow().ui(
+                    s.clone(),
+                    StructUiFlags::default(),
+                    ui,
+                    registry,
+                    memory,
+                    *address,
+                    sections,
+                    test,
+                )
+            }
+        };
+
+        // Handle replacing Struct with a different Struct
+        let response = match response {
+            Some(AddressResponse::Replace(new_s)) => {
+                let (Node::Struct(s) | Node::Pointer(s)) = self else {
+                    panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
+                };
+                *s = new_s;
+                None
+            }
+            r => r,
+        };
+
+        (bytes, response)
+    }
+
     // NOTE(emily): address and offset are independent.
     // address is absolute and offset is where this is in a parent.
     fn ui(
@@ -68,115 +188,15 @@ impl Node {
                 egui::Layout::left_to_right(egui::Align::Min),
                 |ui| {
                     ui.horizontal(|ui| {
-                        let (bytes, response) = match self {
-                            Node::U64 => {
-                                ui.label("U64");
-
-                                Node::none_ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    address,
-                                    offset_in_parent,
-                                    Some(8),
-                                    sections,
-                                    test,
-                                )
-                            }
-                            Node::U32 => {
-                                ui.label("U32");
-
-                                Node::none_ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    address,
-                                    offset_in_parent,
-                                    Some(4),
-                                    sections,
-                                    test,
-                                )
-                            }
-                            Node::U16 => {
-                                ui.label("U16");
-
-                                Node::none_ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    address,
-                                    offset_in_parent,
-                                    Some(2),
-                                    sections,
-                                    test,
-                                )
-                            }
-                            Node::U8 => {
-                                ui.label("U8");
-
-                                Node::none_ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    address,
-                                    offset_in_parent,
-                                    Some(1),
-                                    sections,
-                                    test,
-                                )
-                            }
-                            // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
-                            // Don't just copy paste it.
-                            Node::Struct(s) => {
-                                ui.label("S");
-
-                                s.clone().borrow().ui(
-                                    s.clone(),
-                                    StructUiFlags::default(),
-                                    ui,
-                                    registry,
-                                    memory,
-                                    address,
-                                    sections,
-                                    test,
-                                )
-                            }
-                            Node::Pointer(s) => {
-                                ui.label("P");
-
-                                let mut buffer = [0; 8];
-                                memory.get(address, &mut buffer);
-                                let address = memory::interpret_as(&buffer);
-
-                                s.borrow().ui(
-                                    s.clone(),
-                                    StructUiFlags::default(),
-                                    ui,
-                                    registry,
-                                    memory,
-                                    *address,
-                                    sections,
-                                    test,
-                                )
-                            }
-                        };
-
-                        // Handle replacing Struct with a different Struct here
-                        let response = match response {
-                            Some(AddressResponse::Replace(new_s)) => {
-                                let (Node::Struct(s) | Node::Pointer(s)) = self else {
-                                    panic!()
-                                };
-
-                                // TODO(emily): We can't necessarily do this here, swapping out this pointer might
-                                // already be borrowed
-                                *s = new_s;
-                                None
-                            }
-                            r => r,
-                        };
-
-                        (bytes, response)
+                        self.node_ui_inner(
+                            ui,
+                            registry,
+                            memory,
+                            address,
+                            offset_in_parent,
+                            sections,
+                            test,
+                        )
                     })
                     .inner
                 },

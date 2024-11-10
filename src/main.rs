@@ -232,7 +232,6 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
         let r = ui.button("➕");
 
         if r.clicked() {
-            // TODO(emily): This doesnt work because someone is probably stomping self.options.add_child with a None
             self.options.add_child = Some((tile_id, AddChild::AddressStruct(None, None)));
         }
 
