@@ -9,7 +9,7 @@ use std::{
 use egui_extras::Column;
 use egui_tiles::{Container, Tile, TileId, Tiles};
 use memory::Memory;
-use node::{Struct, StructUiFlags};
+use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, Process, Section};
 use rand::{distributions::Alphanumeric, Rng};
 use registry::Registry;
@@ -132,19 +132,23 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
                 ) {
                     // TODO(emily): We should probably check whether this address is already somewhere
                     // and then open that?
-                    Some(PaneResponse::BlockResponse(AddressResponse::AddressStruct(
+                    Some(PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
                         address,
                         s,
                     ))) => {
                         self.options.add_child =
                             Some((tile_id, AddChild::AddressStruct(s, address)))
                     }
-                    Some(PaneResponse::BlockResponse(AddressResponse::Replace(new_s))) => {
+                    Some(PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s))) => {
                         let Pane::AddressStruct(s, _address) = pane else {
                             panic!();
                         };
                         *s = new_s;
                     }
+                    Some(PaneResponse::AddressStructResponse(AddressResponse::Action(action))) => {
+                        action.call(self.registry);
+                    }
+
                     Some(PaneResponse::OpenAddress(address)) => {
                         self.options.add_child =
                             Some((tile_id, AddChild::AddressStruct(None, Some(address))))
@@ -249,7 +253,7 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
 
 #[derive(Debug)]
 enum PaneResponse {
-    BlockResponse(AddressResponse),
+    AddressStructResponse(AddressResponse),
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
 }
@@ -372,7 +376,8 @@ impl Pane {
 
                 ui.heading("Struct");
 
-                let (bytes, r) = r#struct.borrow_mut().ui(
+                let (bytes, r) = r#struct.borrow().ui(
+                    r#struct.clone(),
                     StructUiFlags { top_level: true },
                     ui,
                     registry,
@@ -382,7 +387,7 @@ impl Pane {
                     test,
                 );
 
-                r.map(|br| PaneResponse::BlockResponse(br))
+                r.map(|br| PaneResponse::AddressStructResponse(br))
             }
             Pane::AddressList => {
                 let (registry_dirty, response) = Pane::registry_list(
@@ -440,8 +445,8 @@ impl Pane {
 enum AddressResponse {
     AddressStruct(Option<Rc<RefCell<Address>>>, Option<Rc<RefCell<Struct>>>),
     Replace(Rc<RefCell<Struct>>),
+    Action(StructAction),
 }
-
 struct App {
     pid_str: String,
     pid: Option<u32>,

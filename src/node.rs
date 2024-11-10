@@ -130,7 +130,8 @@ impl Node {
                             Node::Struct(s) => {
                                 ui.label("S");
 
-                                s.borrow_mut().ui(
+                                s.clone().borrow().ui(
+                                    s.clone(),
                                     StructUiFlags::default(),
                                     ui,
                                     registry,
@@ -147,7 +148,8 @@ impl Node {
                                 memory.get(address, &mut buffer);
                                 let address = memory::interpret_as(&buffer);
 
-                                s.borrow_mut().ui(
+                                s.borrow().ui(
+                                    s.clone(),
                                     StructUiFlags::default(),
                                     ui,
                                     registry,
@@ -165,6 +167,7 @@ impl Node {
                                 let (Node::Struct(s) | Node::Pointer(s)) = self else {
                                     panic!()
                                 };
+
                                 // TODO(emily): We can't necessarily do this here, swapping out this pointer might
                                 // already be borrowed
                                 *s = new_s;
@@ -340,6 +343,38 @@ impl Node {
     }
 }
 
+type StructActionFn = dyn FnOnce(&mut Registry);
+
+pub(crate) struct StructAction(Box<StructActionFn>);
+
+impl StructAction {
+    fn new<F: FnOnce(&mut Registry) + 'static>(f: F) -> Self {
+        Self(Box::new(f))
+    }
+
+    pub(crate) fn call(self, registry: &mut Registry) {
+        (self.0)(registry)
+    }
+}
+
+impl std::fmt::Debug for StructAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("StructAction").field(&"<action>").finish()
+    }
+}
+
+impl From<Box<StructActionFn>> for StructAction {
+    fn from(value: Box<StructActionFn>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<StructAction> for AddressResponse {
+    fn from(value: StructAction) -> Self {
+        AddressResponse::Action(value)
+    }
+}
+
 enum MakeNodeAction {
     Add(Node, usize),
     Remove(usize),
@@ -396,7 +431,8 @@ impl Struct {
     }
 
     pub(crate) fn ui(
-        &mut self,
+        &self,
+        self_rc: Rc<RefCell<Self>>,
         flags: StructUiFlags,
         ui: &mut egui::Ui,
         registry: &mut Registry,
@@ -419,7 +455,24 @@ impl Struct {
                         }
                     }
                 });
-            ui.add(egui::DragValue::new(&mut self.size).range(8..=8192));
+
+            let mut size = self.size;
+
+            if ui
+                .add(egui::DragValue::new(&mut size).range(8..=8192))
+                .changed()
+            {
+                // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
+                response = Some(
+                    StructAction::new({
+                        let zelf = self_rc.clone();
+                        move |_| {
+                            zelf.borrow_mut().size = size;
+                        }
+                    })
+                    .into(),
+                );
+            }
         }
 
         let mut action = None;
@@ -504,12 +557,26 @@ impl Struct {
         });
 
         match action {
-            Some(MakeNodeAction::Add(node, offset)) => {
-                self.nodes.insert(offset, RefCell::new(node));
+            Some(action) => {
+                response = Some(
+                    StructAction::new({
+                        let zelf = self_rc.clone();
+                        move |_registry| {
+                            let mut zelf = zelf.borrow_mut();
+                            match action {
+                                MakeNodeAction::Add(node, offset) => {
+                                    zelf.nodes.insert(offset, RefCell::new(node));
+                                }
+                                MakeNodeAction::Remove(offset) => {
+                                    zelf.nodes.remove(&offset);
+                                }
+                            }
+                        }
+                    })
+                    .into(),
+                );
             }
-            Some(MakeNodeAction::Remove(offset)) => {
-                self.nodes.remove(&offset);
-            }
+
             None => {}
         }
 
