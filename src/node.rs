@@ -58,7 +58,6 @@ impl Node {
         address: usize,
         offset_in_parent: usize,
         sections: Option<&[Section]>,
-        test: &crate::Test,
     ) -> (usize, Option<AddressResponse>) {
         let (bytes, response) = match self {
             Node::U64 => {
@@ -72,7 +71,6 @@ impl Node {
                     offset_in_parent,
                     Some(8),
                     sections,
-                    test,
                 )
             }
             Node::U32 => {
@@ -86,7 +84,6 @@ impl Node {
                     offset_in_parent,
                     Some(4),
                     sections,
-                    test,
                 )
             }
             Node::U16 => {
@@ -100,7 +97,6 @@ impl Node {
                     offset_in_parent,
                     Some(2),
                     sections,
-                    test,
                 )
             }
             Node::U8 => {
@@ -114,7 +110,6 @@ impl Node {
                     offset_in_parent,
                     Some(1),
                     sections,
-                    test,
                 )
             }
             // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
@@ -130,7 +125,6 @@ impl Node {
                     memory,
                     address,
                     sections,
-                    test,
                 )
             }
             Node::Pointer(s) => {
@@ -148,7 +142,6 @@ impl Node {
                     memory,
                     *address,
                     sections,
-                    test,
                 )
             }
         };
@@ -178,7 +171,6 @@ impl Node {
         address: usize,
         offset_in_parent: usize,
         sections: Option<&[Section]>,
-        test: &crate::Test,
     ) -> (usize, Option<AddressResponse>) {
         let height = self.height(ui);
 
@@ -195,7 +187,6 @@ impl Node {
                             address,
                             offset_in_parent,
                             sections,
-                            test,
                         )
                     })
                     .inner
@@ -251,7 +242,6 @@ impl Node {
         offset_in_parent: usize,
         size: Option<usize>,
         sections: Option<&[Section]>,
-        test: &crate::Test,
     ) -> (usize, Option<AddressResponse>) {
         let mut response = None;
 
@@ -459,7 +449,6 @@ impl Struct {
         memory: &mut Memory<'_>,
         address: usize,
         sections: Option<&[Section]>,
-        test: &crate::Test,
     ) -> (usize, Option<crate::AddressResponse>) {
         let mut response = None;
 
@@ -530,7 +519,6 @@ impl Struct {
                                     new_address,
                                     offset,
                                     sections,
-                                    test,
                                 )
                             } else {
                                 Node::none_ui(
@@ -541,7 +529,6 @@ impl Struct {
                                     offset,
                                     None,
                                     sections,
-                                    test,
                                 )
                             };
 

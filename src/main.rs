@@ -383,7 +383,6 @@ impl Pane {
                     memory,
                     **address.borrow(),
                     sections,
-                    test,
                 );
 
                 r.map(|br| PaneResponse::AddressStructResponse(br))
