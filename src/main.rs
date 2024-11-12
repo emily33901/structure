@@ -96,7 +96,7 @@ impl Default for TreeBehaviorOptions {
                 ..Default::default()
             },
             tab_bar_height: 24.0,
-            gap_width: 8.0,
+            gap_width: 4.0,
             add_child: None,
         }
     }
