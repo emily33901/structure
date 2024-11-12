@@ -10,8 +10,9 @@ use egui_tiles::{Container, Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, OpenProcess, Section};
-use project::Project;
+use project::{Layout, Project};
 use registry::Registry;
+use serde::{Deserialize, Serialize};
 
 mod memory;
 mod node;
@@ -525,6 +526,7 @@ enum AddressResponse {
     Replace(Rc<RefCell<Struct>>),
     Action(StructAction),
 }
+
 struct App {
     pid_str: String,
     pid: Option<u32>,
@@ -537,7 +539,6 @@ struct App {
     test: Box<Test>,
 
     tree_options: TreeBehaviorOptions,
-    tree: egui_tiles::Tree<Pane>,
 }
 
 impl Default for App {
@@ -545,7 +546,7 @@ impl Default for App {
         let mut registry = Registry::default();
         let default_pane = registry.default_pane();
 
-        let project = Project::new(registry);
+        let project = Project::new(Layout::new(default_pane), registry);
 
         Self {
             pid_str: Default::default(),
@@ -556,24 +557,6 @@ impl Default for App {
             modules: Default::default(),
             test: Default::default(),
             tree_options: Default::default(),
-            tree: {
-                let mut tiles = Tiles::default();
-                let default_struct_pane = tiles.insert_pane(default_pane);
-
-                let left_hand_lists = vec![
-                    tiles.insert_pane(Pane::AddressList),
-                    tiles.insert_pane(Pane::StructList),
-                    tiles.insert_pane(Pane::ProcessList { search: "".into() }),
-                ];
-
-                let lists_container = Container::new_vertical(left_hand_lists);
-                let tile = tiles.insert_container(lists_container);
-
-                let root_tile = tiles
-                    .insert_container(Container::new_horizontal(vec![tile, default_struct_pane]));
-
-                egui_tiles::Tree::new("view_tree", root_tile, tiles)
-            },
         }
     }
 }
@@ -660,10 +643,12 @@ impl eframe::App for App {
                     registry: &mut self.project.registry,
                 };
 
-                self.tree.ui(&mut behavior, ui);
+                let layout = &mut self.project.layout;
+
+                layout.tree.ui(&mut behavior, ui);
 
                 if let Some((parent, add_child)) = behavior.options.add_child.take() {
-                    let new_child = self.tree.tiles.insert_pane(match add_child {
+                    let new_child = layout.tree.tiles.insert_pane(match add_child {
                         AddChild::AddressStruct(s, address) => {
                             let s = s.unwrap_or_else(|| self.project.registry.default_struct());
                             let address =
@@ -680,16 +665,16 @@ impl eframe::App for App {
                     let mut cur = parent;
 
                     if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) =
-                        self.tree.tiles.get_mut(parent)
+                        layout.tree.tiles.get_mut(parent)
                     {
                         tabs.add_child(new_child);
                         tabs.set_active(new_child);
                     } else {
                         // TODO(emily): Icky copy paste
-                        while let Some(parent) = self.tree.tiles.parent_of(cur) {
+                        while let Some(parent) = layout.tree.tiles.parent_of(cur) {
                             if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(
                                 tabs,
-                            ))) = self.tree.tiles.get_mut(parent)
+                            ))) = layout.tree.tiles.get_mut(parent)
                             {
                                 tabs.add_child(new_child);
                                 tabs.set_active(new_child);

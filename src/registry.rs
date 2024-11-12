@@ -106,7 +106,7 @@ impl Registry {
     pub(crate) fn address_id(&self, address: &Rc<RefCell<Address>>) -> Option<RegistryId> {
         for (id, other_address) in &self.addresses {
             if Rc::ptr_eq(address, other_address) {
-                Some(id);
+                return Some(*id);
             }
         }
 

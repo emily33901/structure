@@ -1,3 +1,4 @@
+use egui_tiles::Tiles;
 use serde::{Deserialize, Serialize};
 
 use crate::project::Project;
@@ -61,15 +62,33 @@ mod v1 {
     }
 
     #[derive(Serialize, Deserialize)]
+    pub(super) enum Pane {
+        AddressStruct {
+            address: RegistryId,
+            r#struct: RegistryId,
+        },
+        StructList,
+        AddressList,
+        ProcessList,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) struct Layout {
+        pub(super) tree: egui_tiles::Tree<Pane>,
+    }
+
+    #[derive(Serialize, Deserialize)]
     pub(super) struct Project {
         pub(super) registry: Registry,
+        pub(super) layout: Layout,
     }
 
     impl From<Project> for crate::project::Project {
         fn from(value: Project) -> Self {
-            Self {
-                registry: value.registry.into(),
-            }
+            let registry = value.registry.into();
+            let layout = value.layout.make_real(&registry);
+
+            Self { layout, registry }
         }
     }
 
@@ -127,7 +146,28 @@ mod v1 {
         }
     }
 
-    impl crate::node::Struct {}
+    impl Layout {
+        fn make_real(&self, registry: &crate::registry::Registry) -> crate::Layout {
+            let convert = super::TreeConvert {
+                registry,
+                convert_pane: Box::new(move |pane, registry| match pane {
+                    Pane::AddressStruct { address, r#struct } => crate::Pane::AddressStruct(
+                        registry.structs.get(r#struct).unwrap().clone(),
+                        registry.addresses.get(address).unwrap().clone(),
+                    ),
+                    Pane::StructList => crate::Pane::StructList,
+                    Pane::AddressList => crate::Pane::AddressList,
+                    Pane::ProcessList => crate::Pane::ProcessList { search: "".into() },
+                }),
+            };
+
+            let (new_tiles, new_root) = convert.convert(&self.tree);
+
+            crate::Layout {
+                tree: egui_tiles::Tree::new("layout-tree", new_root, new_tiles),
+            }
+        }
+    }
 }
 
 impl v1::Node {
@@ -181,9 +221,142 @@ impl v1::Registry {
     }
 }
 
+type ConvertPane<TPaneA, TPaneB> = Box<dyn Fn(&TPaneA, &crate::Registry) -> TPaneB>;
+
+struct TreeConvert<'a, TPaneA, TPaneB> {
+    pub(crate) registry: &'a crate::Registry,
+    pub(crate) convert_pane: ConvertPane<TPaneA, TPaneB>,
+}
+
+impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
+    fn clone_tile(
+        &self,
+        old_pane: &TPaneA,
+        old_tiles: &egui_tiles::Tiles<TPaneA>,
+        new_tiles: &mut egui_tiles::Tiles<TPaneB>,
+    ) -> egui_tiles::TileId {
+        new_tiles.insert_pane((self.convert_pane)(old_pane, &self.registry))
+    }
+
+    fn clone_container(
+        &self,
+        old_container: &egui_tiles::Container,
+        old_tiles: &egui_tiles::Tiles<TPaneA>,
+        new_tiles: &mut egui_tiles::Tiles<TPaneB>,
+    ) -> egui_tiles::TileId {
+        match old_container {
+            egui_tiles::Container::Tabs(tabs) => {
+                let mut new_tabs = vec![];
+
+                let mut new_active_tile = None;
+
+                for tile in &tabs.children {
+                    let new_tile = self.clone(*tile, old_tiles, new_tiles);
+
+                    if let Some(t) = tabs.active {
+                        if t == *tile {
+                            new_active_tile = Some(new_tile);
+                        }
+                    }
+
+                    new_tabs.push(new_tile);
+                }
+
+                let mut container = egui_tiles::Tabs::new(new_tabs);
+                container.active = new_active_tile;
+
+                new_tiles.insert_container(container)
+            }
+            egui_tiles::Container::Linear(linear) => {
+                let mut new_children = vec![];
+
+                for tile in &linear.children {
+                    let new_tile = self.clone(*tile, old_tiles, new_tiles);
+
+                    new_children.push(new_tile);
+                }
+
+                let mut container = egui_tiles::Linear::new(linear.dir, new_children);
+                container.shares = linear.shares.clone();
+
+                new_tiles.insert_container(container)
+            }
+            egui_tiles::Container::Grid(grid) => {
+                let mut new_children = vec![];
+
+                for tile in grid.children() {
+                    let new_tile = self.clone(*tile, old_tiles, new_tiles);
+
+                    new_children.push(new_tile);
+                }
+
+                let mut container = egui_tiles::Grid::new(new_children);
+
+                container.layout = grid.layout;
+                container.col_shares = grid.col_shares.clone();
+                container.row_shares = grid.row_shares.clone();
+
+                new_tiles.insert_container(container)
+            }
+        }
+    }
+
+    fn clone(
+        &self,
+        old_tile: egui_tiles::TileId,
+        old_tiles: &egui_tiles::Tiles<TPaneA>,
+        new_tiles: &mut egui_tiles::Tiles<TPaneB>,
+    ) -> egui_tiles::TileId {
+        if let Some(container) = old_tiles.get_container(old_tile) {
+            self.clone_container(container, old_tiles, new_tiles)
+        } else if let Some(tile) = old_tiles.get_pane(&old_tile) {
+            self.clone_tile(tile, old_tiles, new_tiles)
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn convert(
+        &self,
+        tree: &egui_tiles::Tree<TPaneA>,
+    ) -> (egui_tiles::Tiles<TPaneB>, egui_tiles::TileId) {
+        let old_root = tree.root().unwrap();
+        let old_tiles = &tree.tiles;
+
+        let mut new_tiles = egui_tiles::Tiles::default();
+
+        let new_root = self.clone(old_root, &old_tiles, &mut new_tiles);
+        (new_tiles, new_root)
+    }
+}
+
+impl v1::Layout {
+    fn new(from: &crate::Layout, registry: &crate::Registry) -> Self {
+        let convert = TreeConvert {
+            registry,
+            convert_pane: Box::new(move |pane, registry| match pane {
+                crate::Pane::AddressStruct(r#struct, address) => v1::Pane::AddressStruct {
+                    r#struct: registry.struct_id(r#struct).unwrap(),
+                    address: registry.address_id(address).unwrap(),
+                },
+                crate::Pane::StructList => v1::Pane::StructList,
+                crate::Pane::AddressList => v1::Pane::AddressList,
+                crate::Pane::ProcessList { search } => v1::Pane::ProcessList,
+            }),
+        };
+
+        let (new_tiles, new_root) = convert.convert(&from.tree);
+
+        Self {
+            tree: egui_tiles::Tree::new("storage-tree", new_root, new_tiles),
+        }
+    }
+}
+
 impl v1::Project {
     fn new(from: &crate::project::Project) -> Self {
         Self {
+            layout: v1::Layout::new(&from.layout, &from.registry),
             registry: v1::Registry::new(&from.registry),
         }
     }
