@@ -396,7 +396,7 @@ pub(crate) fn save_to_disk(project: &Project, path: &std::path::Path) -> Result<
 }
 
 pub(crate) fn load_from_disk(path: &std::path::Path) -> Result<Project> {
-    let mut f = std::fs::OpenOptions::new()
+    let f = std::fs::OpenOptions::new()
         .create(false)
         .truncate(false)
         .read(true)

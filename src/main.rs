@@ -1,18 +1,16 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    rc::{Rc, Weak},
-    str::FromStr,
+    rc::Rc,
 };
 
 use egui_extras::Column;
-use egui_tiles::{Container, Tile, TileId, Tiles};
+use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, OpenProcess, Process, Section};
 use project::{Layout, Project};
 use registry::Registry;
-use serde::{Deserialize, Serialize};
 
 mod memory;
 mod node;
@@ -574,6 +572,8 @@ impl eframe::App for App {
         self.test.value += 1;
 
         // TODO(emily): Don't need to do these things each frame
+        // TODO(emily): Handle these higher up than in process, so that we can make use of Memory
+        // and its paging
         {
             if let Some(process) = self.open_process.as_ref() {
                 self.modules = process.modules().ok();
@@ -706,7 +706,6 @@ impl eframe::App for App {
                     PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
                         action.call(&mut behavior.state);
                     }
-
                     PaneResponse::OpenAddress(address) => {
                         add_child(
                             &mut self.project.registry,
@@ -714,17 +713,14 @@ impl eframe::App for App {
                             AddChild::AddressStruct(None, Some(address)),
                         );
                     }
-
                     PaneResponse::OpenStruct(s) => add_child(
                         &mut self.project.registry,
                         from,
                         AddChild::AddressStruct(Some(s), None),
                     ),
-
                     PaneResponse::ProcessSelected(new_process) => {
                         self.process_changed(new_process);
                     }
-
                     PaneResponse::AddChild(child) => {
                         add_child(&mut self.project.registry, from, child)
                     }

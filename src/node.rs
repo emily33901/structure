@@ -5,7 +5,7 @@ use egui::{ahash::HashMap, vec2, RichText};
 
 use crate::{
     memory::{self, Memory},
-    registry::{Registry, RegistryId},
+    registry::Registry,
     Address, AddressResponse, State,
 };
 
@@ -184,7 +184,7 @@ impl Node {
         let State {
             memory,
             registry,
-            sections: sections,
+            sections,
             ..
         } = state;
 
@@ -446,7 +446,7 @@ impl Struct {
                 .max_scroll_height(max_height)
                 .column(egui_extras::Column::remainder())
                 .sense(egui::Sense::click())
-                .body(|mut body| {
+                .body(|body| {
                     // body.ui_mut().style_mut().spacing.item_spacing = vec2(0.0, 0.0);
 
                     body.heterogeneous_rows(heights, |mut row| {

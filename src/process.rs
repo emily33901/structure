@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_void, OsStr},
+    ffi::c_void,
     mem::{offset_of, MaybeUninit},
 };
 
@@ -24,7 +24,7 @@ use windows::{
     },
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
 pub(crate) struct Module {
     address: usize,
