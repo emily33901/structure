@@ -7,7 +7,7 @@ use crate::{
     memory::{self, Memory},
     process::{OpenProcess, Section},
     registry::{Registry, RegistryId},
-    Address, AddressResponse,
+    Address, AddressResponse, State,
 };
 
 // TODO(emily): Need some way to collapse the view of Struct or Pointer
@@ -56,96 +56,46 @@ impl Node {
     fn node_ui_inner(
         &mut self,
         ui: &mut egui::Ui,
-        registry: &mut Registry,
-        memory: &mut Memory<'_>,
         address: usize,
         offset_in_parent: usize,
-        sections: Option<&[Section]>,
+        state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         let (bytes, response) = match self {
             Node::U64 => {
                 ui.label("U64");
-
-                Node::none_ui(
-                    ui,
-                    registry,
-                    memory,
-                    address,
-                    offset_in_parent,
-                    Some(8),
-                    sections,
-                )
+                Node::none_ui(ui, address, offset_in_parent, Some(8), state)
             }
             Node::U32 => {
                 ui.label("U32");
-
-                Node::none_ui(
-                    ui,
-                    registry,
-                    memory,
-                    address,
-                    offset_in_parent,
-                    Some(4),
-                    sections,
-                )
+                Node::none_ui(ui, address, offset_in_parent, Some(4), state)
             }
             Node::U16 => {
                 ui.label("U16");
-
-                Node::none_ui(
-                    ui,
-                    registry,
-                    memory,
-                    address,
-                    offset_in_parent,
-                    Some(2),
-                    sections,
-                )
+                Node::none_ui(ui, address, offset_in_parent, Some(2), state)
             }
             Node::U8 => {
                 ui.label("U8");
-
-                Node::none_ui(
-                    ui,
-                    registry,
-                    memory,
-                    address,
-                    offset_in_parent,
-                    Some(1),
-                    sections,
-                )
+                Node::none_ui(ui, address, offset_in_parent, Some(1), state)
             }
+
             // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
             // Don't just copy paste it.
             Node::Struct(s) => {
                 ui.label("S");
 
-                s.clone().borrow().ui(
-                    s.clone(),
-                    StructUiFlags::default(),
-                    ui,
-                    registry,
-                    memory,
-                    address,
-                    sections,
-                )
+                s.clone()
+                    .borrow()
+                    .ui(s.clone(), StructUiFlags::default(), ui, address, state)
             }
             Node::Pointer(s) => {
                 ui.label("P");
 
                 let mut buffer = [0; 8];
-                memory.get(address, &mut buffer);
+                state.memory.get(address, &mut buffer);
                 let address = memory::interpret_as(&buffer);
 
-                s.borrow().ui(
-                    s.clone(),
-                    StructUiFlags::default(),
-                    ui,
-                    registry,
-                    memory,
-                    *address,
-                    sections,
-                )
+                s.borrow()
+                    .ui(s.clone(), StructUiFlags::default(), ui, *address, state)
             }
         };
 
@@ -169,11 +119,9 @@ impl Node {
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        registry: &mut Registry,
-        memory: &mut Memory<'_>,
         address: usize,
         offset_in_parent: usize,
-        sections: Option<&[Section]>,
+        state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         let height = self.height(ui);
 
@@ -181,7 +129,7 @@ impl Node {
             .allocate_ui_with_layout(
                 vec2(ui.available_width(), height),
                 egui::Layout::left_to_right(egui::Align::Min),
-                |ui| self.node_ui_inner(ui, registry, memory, address, offset_in_parent, sections),
+                |ui| self.node_ui_inner(ui, address, offset_in_parent, state),
             )
             .inner;
 
@@ -227,17 +175,23 @@ impl Node {
     // address is absolute and offset is where this is in a parent.
     fn none_ui(
         ui: &mut egui::Ui,
-        registry: &mut Registry,
-        memory: &mut Memory<'_>,
         address: usize,
         offset_in_parent: usize,
         size: Option<usize>,
-        sections: Option<&[Section]>,
+        state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         let mut response = None;
 
-        let size = size.unwrap_or(none_ui_rules(offset_in_parent));
+        let State {
+            memory,
+            registry,
+            sections: sections,
+            ..
+        } = state;
 
+        let sections = *sections;
+
+        let size = size.unwrap_or(none_ui_rules(offset_in_parent));
         let mut buffer = vec![0; size];
 
         // TODO(emily): In here we are padding by padding the strings which works because they are monospace.
@@ -344,17 +298,17 @@ impl Node {
     }
 }
 
-type StructActionFn = dyn FnOnce(&mut Registry);
+type StructActionFn = dyn FnOnce(&mut State);
 
 pub(crate) struct StructAction(Box<StructActionFn>);
 
 impl StructAction {
-    fn new<F: FnOnce(&mut Registry) + 'static>(f: F) -> Self {
+    fn new<F: FnOnce(&mut State) + 'static>(f: F) -> Self {
         Self(Box::new(f))
     }
 
-    pub(crate) fn call(self, registry: &mut Registry) {
-        (self.0)(registry)
+    pub(crate) fn call(self, state: &mut State<'_>) {
+        (self.0)(state)
     }
 }
 
@@ -436,10 +390,8 @@ impl Struct {
         self_rc: Rc<RefCell<Self>>,
         flags: StructUiFlags,
         ui: &mut egui::Ui,
-        registry: &mut Registry,
-        memory: &mut Memory<'_>,
         address: usize,
-        sections: Option<&[Section]>,
+        state: &mut State<'_>,
     ) -> (usize, Option<crate::AddressResponse>) {
         let mut response = None;
 
@@ -449,7 +401,7 @@ impl Struct {
             egui::ComboBox::new((ui.id(), address, &self.name), "")
                 .selected_text(&self.name)
                 .show_ui(ui, |ui| {
-                    for (id, (name, s)) in &registry.structs_by_name {
+                    for (id, (name, s)) in &state.registry.structs_by_name {
                         if ui.button(format!("{name} ({id})")).clicked() {
                             response = Some(AddressResponse::Replace(s.clone()))
                         }
@@ -458,7 +410,7 @@ impl Struct {
                     ui.separator();
 
                     if ui.button(format!("New struct")).clicked() {
-                        response = Some(AddressResponse::Replace(registry.default_struct()))
+                        response = Some(AddressResponse::Replace(state.registry.default_struct()))
                     }
                 });
 
@@ -509,24 +461,9 @@ impl Struct {
                             let new_address = address.wrapping_add(offset);
 
                             let (bytes, r) = if let Some(node) = self.nodes.get(&offset) {
-                                node.borrow_mut().ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    new_address,
-                                    offset,
-                                    sections,
-                                )
+                                node.borrow_mut().ui(ui, new_address, offset, state)
                             } else {
-                                Node::none_ui(
-                                    ui,
-                                    registry,
-                                    memory,
-                                    new_address,
-                                    offset,
-                                    None,
-                                    sections,
-                                )
+                                Node::none_ui(ui, new_address, offset, None, state)
                             };
 
                             if let Some(r) = r {
@@ -539,22 +476,29 @@ impl Struct {
 
                             if ui.button("Open address in new window").clicked() {
                                 response = Some(AddressResponse::AddressStruct(
-                                    Some(registry.find_or_register_address(Address::from(address))),
+                                    Some(
+                                        state
+                                            .registry
+                                            .find_or_register_address(Address::from(address)),
+                                    ),
                                     None,
                                 ))
                             }
 
                             if let Some(node) = self.nodes.get(&offset) {
                                 ui.separator();
-                                if let Some(r) =
-                                    node.borrow().context_menu(registry, memory, address, ui)
-                                {
+                                if let Some(r) = node.borrow().context_menu(
+                                    state.registry,
+                                    state.memory,
+                                    address,
+                                    ui,
+                                ) {
                                     response = Some(r);
                                 }
                             }
 
                             ui.separator();
-                            action = Node::make_node_options(ui, registry, offset);
+                            action = Node::make_node_options(ui, state.registry, offset);
                         });
                     });
                 });

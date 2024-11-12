@@ -1,4 +1,3 @@
-use egui_tiles::Tiles;
 use serde::{Deserialize, Serialize};
 
 use crate::project::Project;
@@ -69,7 +68,9 @@ mod v1 {
         },
         StructList,
         AddressList,
-        ProcessList,
+        ProcessList {
+            matching: String,
+        },
     }
 
     #[derive(Serialize, Deserialize)]
@@ -151,13 +152,15 @@ mod v1 {
             let convert = super::TreeConvert {
                 registry,
                 convert_pane: Box::new(move |pane, registry| match pane {
-                    Pane::AddressStruct { address, r#struct } => crate::Pane::AddressStruct(
-                        registry.structs.get(r#struct).unwrap().clone(),
-                        registry.addresses.get(address).unwrap().clone(),
-                    ),
+                    Pane::AddressStruct { address, r#struct } => crate::Pane::AddressStruct {
+                        r#struct: registry.structs.get(r#struct).unwrap().clone(),
+                        address: registry.addresses.get(address).unwrap().clone(),
+                    },
                     Pane::StructList => crate::Pane::StructList,
                     Pane::AddressList => crate::Pane::AddressList,
-                    Pane::ProcessList => crate::Pane::ProcessList { search: "".into() },
+                    Pane::ProcessList { matching } => crate::Pane::ProcessList {
+                        matching: matching.into(),
+                    },
                 }),
             };
 
@@ -335,13 +338,15 @@ impl v1::Layout {
         let convert = TreeConvert {
             registry,
             convert_pane: Box::new(move |pane, registry| match pane {
-                crate::Pane::AddressStruct(r#struct, address) => v1::Pane::AddressStruct {
+                crate::Pane::AddressStruct { r#struct, address } => v1::Pane::AddressStruct {
                     r#struct: registry.struct_id(r#struct).unwrap(),
                     address: registry.address_id(address).unwrap(),
                 },
                 crate::Pane::StructList => v1::Pane::StructList,
                 crate::Pane::AddressList => v1::Pane::AddressList,
-                crate::Pane::ProcessList { search } => v1::Pane::ProcessList,
+                crate::Pane::ProcessList { matching } => v1::Pane::ProcessList {
+                    matching: matching.clone(),
+                },
             }),
         };
 

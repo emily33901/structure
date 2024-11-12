@@ -105,11 +105,7 @@ impl Default for TreeBehaviorOptions {
 struct TreeBehavior<'a> {
     options: &'a mut TreeBehaviorOptions,
 
-    process: &'a OpenProcess,
-    registry: &'a mut crate::registry::Registry,
-    memory: Memory<'a>,
-    sections: Option<&'a [Section]>,
-    test: &'a Test,
+    state: State<'a>,
 }
 
 const PANE_INNER_PAD: f32 = 4.0;
@@ -126,13 +122,7 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.add_space(PANE_INNER_PAD);
 
-                match pane.ui(
-                    ui,
-                    self.registry,
-                    &mut self.memory,
-                    self.sections,
-                    self.test,
-                ) {
+                match pane.ui(ui, &mut self.state) {
                     // TODO(emily): We should probably check whether this address is already somewhere
                     // and then open that?
                     Some(PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
@@ -143,13 +133,17 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
                             Some((tile_id, AddChild::AddressStruct(s, address)))
                     }
                     Some(PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s))) => {
-                        let Pane::AddressStruct(s, _address) = pane else {
+                        let Pane::AddressStruct {
+                            r#struct: s,
+                            address: _address,
+                        } = pane
+                        else {
                             panic!();
                         };
                         *s = new_s;
                     }
                     Some(PaneResponse::AddressStructResponse(AddressResponse::Action(action))) => {
-                        action.call(self.registry);
+                        action.call(&mut self.state);
                     }
 
                     Some(PaneResponse::OpenAddress(address)) => {
@@ -263,10 +257,15 @@ enum PaneResponse {
 }
 
 enum Pane {
-    AddressStruct(Rc<RefCell<Struct>>, Rc<RefCell<Address>>),
+    AddressStruct {
+        address: Rc<RefCell<Address>>,
+        r#struct: Rc<RefCell<Struct>>,
+    },
     StructList,
     AddressList,
-    ProcessList { search: String },
+    ProcessList {
+        matching: String,
+    },
 }
 
 impl Pane {
@@ -339,16 +338,9 @@ impl Pane {
         (registry_dirty, response)
     }
 
-    fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        registry: &mut crate::registry::Registry,
-        memory: &mut Memory<'_>,
-        sections: Option<&[Section]>,
-        test: &Test,
-    ) -> Option<PaneResponse> {
+    fn ui(&mut self, ui: &mut egui::Ui, state: &mut State<'_>) -> Option<PaneResponse> {
         match self {
-            Pane::AddressStruct(r#struct, address) => {
+            Pane::AddressStruct { r#struct, address } => {
                 let address_name_id = { egui::Id::new(ui.id()).with("address-name") };
 
                 ui.horizontal(|ui| {
@@ -365,7 +357,7 @@ impl Pane {
                             .changed()
                         {
                             if *address == 0 {
-                                *address = test as *const _ as usize;
+                                *address = state.test as *const _ as usize;
                             }
                         }
                     }
@@ -375,7 +367,8 @@ impl Pane {
                         egui::ComboBox::new("address-combo-box", "")
                             .selected_text(name)
                             .show_ui(ui, |ui| {
-                                for (id, (name, other_address)) in &registry.addresses_by_name {
+                                for (id, (name, other_address)) in &state.registry.addresses_by_name
+                                {
                                     if ui.button(format!("{name} ({id})")).clicked() {
                                         *address = other_address.clone();
                                     }
@@ -384,7 +377,7 @@ impl Pane {
                                 ui.separator();
 
                                 if ui.button("New address").clicked() {
-                                    *address = registry.default_address();
+                                    *address = state.registry.default_address();
                                 }
                             });
                     }
@@ -398,10 +391,8 @@ impl Pane {
                     r#struct.clone(),
                     StructUiFlags { top_level: true },
                     ui,
-                    registry,
-                    memory,
                     **address.borrow(),
-                    sections,
+                    state,
                 );
 
                 r.map(|br| PaneResponse::AddressStructResponse(br))
@@ -413,7 +404,7 @@ impl Pane {
 
                 let (registry_dirty, response) = Pane::registry_list(
                     ui,
-                    &mut registry.addresses,
+                    &mut state.registry.addresses,
                     |ui, address| {
                         ui.text_edit_singleline(&mut address.borrow_mut().0)
                             .changed()
@@ -428,7 +419,7 @@ impl Pane {
                     &["id", "address", "name"],
                 );
                 if registry_dirty {
-                    registry.mark_diry();
+                    state.registry.mark_diry();
                 }
                 response
             }
@@ -439,7 +430,7 @@ impl Pane {
 
                 let (registry_dirty, response) = Pane::registry_list(
                     ui,
-                    &mut registry.structs,
+                    &mut state.registry.structs,
                     |ui, s| ui.text_edit_singleline(&mut s.borrow_mut().name).changed(),
                     |ui, s| {
                         ui.label(format!("{}", s.borrow().byte_size()));
@@ -448,11 +439,11 @@ impl Pane {
                     &["id", "size", "name"],
                 );
                 if registry_dirty {
-                    registry.mark_diry();
+                    state.registry.mark_diry();
                 }
                 response
             }
-            Pane::ProcessList { search } => {
+            Pane::ProcessList { matching } => {
                 // TODO(emily): Cache this list please
                 let processes = process::processes().unwrap_or_default();
 
@@ -461,7 +452,7 @@ impl Pane {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         ui.add_space(8.0);
-                        ui.add(egui::TextEdit::singleline(search).hint_text("search"));
+                        ui.add(egui::TextEdit::singleline(matching).hint_text("search"));
                     })
                 });
 
@@ -469,10 +460,11 @@ impl Pane {
 
                 let processes: Vec<_> = processes
                     .into_iter()
-                    .filter(|p| p.name.contains(search.as_str()))
+                    .filter(|p| p.name.contains(matching.as_str()))
                     .collect();
 
                 egui_extras::TableBuilder::new(ui)
+                    .sense(egui::Sense::click())
                     .column(Column::exact(25.0))
                     .column(Column::auto().at_least(40.0))
                     .column(Column::remainder())
@@ -490,6 +482,8 @@ impl Pane {
                     .body(|body| {
                         body.rows(25.0, processes.len(), |mut row| {
                             let process = &processes[row.index()];
+
+                            // row.set_selected(process.pid == );
 
                             row.col(|ui| {
                                 ui.label("img");
@@ -510,12 +504,12 @@ impl Pane {
 
     fn title(&self) -> String {
         match self {
-            Pane::AddressStruct(r#struct, address) => {
+            Pane::AddressStruct { r#struct, address } => {
                 format!("{} @ {:016X}", r#struct.borrow().name, **address.borrow())
             }
             Pane::AddressList => "Address list".into(),
             Pane::StructList => "Struct list".into(),
-            Pane::ProcessList { search: _ } => "Process list".into(),
+            Pane::ProcessList { matching: _ } => "Process list".into(),
         }
     }
 }
@@ -525,6 +519,15 @@ enum AddressResponse {
     AddressStruct(Option<Rc<RefCell<Address>>>, Option<Rc<RefCell<Struct>>>),
     Replace(Rc<RefCell<Struct>>),
     Action(StructAction),
+}
+
+struct State<'a> {
+    registry: &'a mut Registry,
+    memory: &'a mut Memory<'a>,
+    sections: Option<&'a [Section]>,
+    modules: Option<&'a [Module]>,
+    pid: &'a u32,
+    test: &'a Test,
 }
 
 struct App {
@@ -634,13 +637,19 @@ impl eframe::App for App {
             }
 
             if let Some(process) = self.process.as_ref() {
+                // TODO(emily): At the moment we refresh all pages every frame.
+                let mut memory = Memory::new(process);
+
                 let mut behavior = TreeBehavior {
                     options: &mut self.tree_options,
-                    memory: Memory::new(process),
-                    process,
-                    sections: self.sections.as_ref().map(|x| x.as_slice()),
-                    test: &self.test,
-                    registry: &mut self.project.registry,
+                    state: State {
+                        registry: &mut self.project.registry,
+                        memory: &mut memory,
+                        sections: self.sections.as_ref().map(|x| x.as_slice()),
+                        modules: self.modules.as_ref().map(|x| x.as_slice()),
+                        pid: self.pid.as_ref().unwrap(),
+                        test: &self.test,
+                    },
                 };
 
                 let layout = &mut self.project.layout;
@@ -654,11 +663,16 @@ impl eframe::App for App {
                             let address =
                                 address.unwrap_or_else(|| self.project.registry.default_address());
 
-                            Pane::AddressStruct(s, address)
+                            Pane::AddressStruct {
+                                r#struct: s,
+                                address,
+                            }
                         }
                         AddChild::AddressList => Pane::AddressList,
                         AddChild::StructList => Pane::StructList,
-                        AddChild::ProcessList => Pane::ProcessList { search: "".into() },
+                        AddChild::ProcessList => Pane::ProcessList {
+                            matching: "".into(),
+                        },
                     });
 
                     // Find some parent tabs to insert this into

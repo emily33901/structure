@@ -16,7 +16,9 @@ impl Layout {
                 let left_hand_lists = vec![
                     tiles.insert_pane(Pane::AddressList),
                     tiles.insert_pane(Pane::StructList),
-                    tiles.insert_pane(Pane::ProcessList { search: "".into() }),
+                    tiles.insert_pane(Pane::ProcessList {
+                        matching: "".into(),
+                    }),
                 ];
 
                 let lists_container = Container::new_vertical(left_hand_lists);

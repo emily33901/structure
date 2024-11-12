@@ -73,7 +73,10 @@ impl Registry {
     }
 
     pub(crate) fn default_pane(&mut self) -> Pane {
-        Pane::AddressStruct(self.default_struct(), self.default_address())
+        Pane::AddressStruct {
+            r#struct: self.default_struct(),
+            address: self.default_address(),
+        }
     }
 
     pub(crate) fn frame(&mut self) {
