@@ -80,55 +80,68 @@ pub(crate) fn disect_bytes(
 
 const MEMORY_PAGE_LEN: usize = 4096;
 
-pub(crate) struct Memory<'a> {
-    process: &'a OpenProcess,
-    pages: HashMap<usize, Vec<u8>>,
+pub(crate) enum Memory<'a> {
+    Null,
+    Process {
+        process: &'a OpenProcess,
+        pages: HashMap<usize, Vec<u8>>,
+    },
 }
 
 impl<'a> Memory<'a> {
-    pub(crate) fn new(process: &'a OpenProcess) -> Self {
-        Self {
+    pub(crate) fn new_process(process: &'a OpenProcess) -> Self {
+        Self::Process {
             process: process,
             pages: Default::default(),
         }
     }
 
-    fn round_to_page(address: usize) -> usize {
+    pub(crate) fn new_null() -> Self {
+        Self::Null
+    }
+
+    pub(crate) fn round_to_page(address: usize) -> usize {
         (address / MEMORY_PAGE_LEN) * MEMORY_PAGE_LEN
     }
 
     pub(crate) fn get(&mut self, address: usize, buffer: &mut [u8]) {
-        let page_start = Self::round_to_page(address);
-
-        let dest_len = buffer.len();
-
-        // Do we have this page
-        let pages = (address.saturating_sub(page_start)) / MEMORY_PAGE_LEN + 1;
-
-        let mut start = 0;
-        for i in 0..pages {
-            let page_address = page_start + i * MEMORY_PAGE_LEN;
-
-            let mut page = self
-                .pages
-                .entry(page_address)
-                .or_insert_with(|| {
-                    let mut buffer = vec![0; MEMORY_PAGE_LEN];
-                    let _ = self.process.read_process_memory(page_address, &mut buffer);
-                    buffer
-                })
-                .as_slice();
-
-            if i == 0 {
-                // Start however far we are supposed to in that page
-                page = &page[address - page_start..];
+        match self {
+            Memory::Null => {
+                buffer.fill(0);
             }
+            Memory::Process { process, pages } => {
+                let page_start = Self::round_to_page(address);
 
-            let end = page.len().min(dest_len);
+                let dest_len = buffer.len();
 
-            buffer[start..end].copy_from_slice(&page[..end]);
+                // Do we have this page
+                let page_count = (address.saturating_sub(page_start)) / MEMORY_PAGE_LEN + 1;
 
-            start += end - start;
+                let mut start = 0;
+                for i in 0..page_count {
+                    let page_address = page_start + i * MEMORY_PAGE_LEN;
+
+                    let mut page = pages
+                        .entry(page_address)
+                        .or_insert_with(|| {
+                            let mut buffer = vec![0; MEMORY_PAGE_LEN];
+                            let _ = process.read_process_memory(page_address, &mut buffer);
+                            buffer
+                        })
+                        .as_slice();
+
+                    if i == 0 {
+                        // Start however far we are supposed to in that page
+                        page = &page[address - page_start..];
+                    }
+
+                    let end = page.len().min(dest_len);
+
+                    buffer[start..end].copy_from_slice(&page[..end]);
+
+                    start += end - start;
+                }
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use egui_extras::Column;
 use egui_tiles::{Container, Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
-use process::{Module, OpenProcess, Section};
+use process::{Module, OpenProcess, Process, Section};
 use project::{Layout, Project};
 use registry::Registry;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,7 @@ impl Default for Test {
     }
 }
 
+#[derive(Debug)]
 enum AddChild {
     AddressStruct(Option<Rc<RefCell<Struct>>>, Option<Rc<RefCell<Address>>>),
     AddressList,
@@ -85,7 +86,7 @@ struct TreeBehaviorOptions {
     simplification_options: egui_tiles::SimplificationOptions,
     tab_bar_height: f32,
     gap_width: f32,
-    add_child: Option<(egui_tiles::TileId, AddChild)>,
+    pane_response: Option<(TileId, PaneResponse)>,
 }
 
 impl Default for TreeBehaviorOptions {
@@ -97,7 +98,7 @@ impl Default for TreeBehaviorOptions {
             },
             tab_bar_height: 24.0,
             gap_width: 4.0,
-            add_child: None,
+            pane_response: None,
         }
     }
 }
@@ -122,45 +123,8 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.add_space(PANE_INNER_PAD);
 
-                match pane.ui(ui, &mut self.state) {
-                    // TODO(emily): We should probably check whether this address is already somewhere
-                    // and then open that?
-                    Some(PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
-                        address,
-                        s,
-                    ))) => {
-                        self.options.add_child =
-                            Some((tile_id, AddChild::AddressStruct(s, address)))
-                    }
-                    Some(PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s))) => {
-                        let Pane::AddressStruct {
-                            r#struct: s,
-                            address: _address,
-                        } = pane
-                        else {
-                            panic!();
-                        };
-                        *s = new_s;
-                    }
-                    Some(PaneResponse::AddressStructResponse(AddressResponse::Action(action))) => {
-                        action.call(&mut self.state);
-                    }
-
-                    Some(PaneResponse::OpenAddress(address)) => {
-                        self.options.add_child =
-                            Some((tile_id, AddChild::AddressStruct(None, Some(address))))
-                    }
-
-                    Some(PaneResponse::OpenStruct(s)) => {
-                        self.options.add_child =
-                            Some((tile_id, AddChild::AddressStruct(Some(s), None)))
-                    }
-
-                    Some(r) => {
-                        unreachable!();
-                    }
-
-                    None => {}
+                if let Some(pane_response) = pane.ui(ui, &mut self.state) {
+                    self.options.pane_response = Some((tile_id, pane_response))
                 }
             });
         });
@@ -228,24 +192,29 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
     ) {
         let r = ui.button("➕");
 
+        let mut response = None;
         if r.clicked() {
-            self.options.add_child = Some((tile_id, AddChild::AddressStruct(None, None)));
+            response = Some(AddChild::AddressStruct(None, None));
         }
 
         r.context_menu(|ui| {
             if ui.button("Address").clicked() {
-                self.options.add_child = Some((tile_id, AddChild::AddressStruct(None, None)))
+                response = Some(AddChild::AddressStruct(None, None));
             }
             if ui.button("Address list").clicked() {
-                self.options.add_child = Some((tile_id, AddChild::AddressList))
+                response = Some(AddChild::AddressList);
             }
             if ui.button("Struct list").clicked() {
-                self.options.add_child = Some((tile_id, AddChild::StructList))
+                response = Some(AddChild::StructList);
             }
             if ui.button("Process list").clicked() {
-                self.options.add_child = Some((tile_id, AddChild::ProcessList))
+                response = Some(AddChild::ProcessList);
             }
         });
+
+        if let Some(add_child) = response {
+            self.options.pane_response = Some((tile_id, PaneResponse::AddChild(add_child)));
+        }
     }
 }
 
@@ -254,6 +223,8 @@ enum PaneResponse {
     AddressStructResponse(AddressResponse),
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
+    ProcessSelected(Process),
+    AddChild(AddChild),
 }
 
 enum Pane {
@@ -444,9 +415,6 @@ impl Pane {
                 response
             }
             Pane::ProcessList { matching } => {
-                // TODO(emily): Cache this list please
-                let processes = process::processes().unwrap_or_default();
-
                 ui.horizontal(|ui| {
                     ui.heading("Processes");
 
@@ -456,22 +424,21 @@ impl Pane {
                     })
                 });
 
+                let mut process_selected = None;
+
                 ui.separator();
 
-                let processes: Vec<_> = processes
+                let processes: Vec<_> = state
+                    .processes
                     .into_iter()
                     .filter(|p| p.name.contains(matching.as_str()))
                     .collect();
 
                 egui_extras::TableBuilder::new(ui)
                     .sense(egui::Sense::click())
-                    .column(Column::exact(25.0))
                     .column(Column::auto().at_least(40.0))
                     .column(Column::remainder())
                     .header(25.0, |mut header| {
-                        header.col(|ui| {
-                            ui.heading("");
-                        });
                         header.col(|ui| {
                             ui.heading("Id");
                         });
@@ -480,24 +447,41 @@ impl Pane {
                         });
                     })
                     .body(|body| {
-                        body.rows(25.0, processes.len(), |mut row| {
-                            let process = &processes[row.index()];
+                        body.rows(15.0, processes.len(), |mut row| {
+                            let process = processes[row.index()];
 
-                            // row.set_selected(process.pid == );
+                            if let Some(active_process) = state.process {
+                                row.set_selected(active_process.pid == process.pid);
+                            }
 
-                            row.col(|ui| {
-                                ui.label("img");
-                            });
-                            row.col(|ui| {
-                                ui.label(format!("{}", process.pid));
-                            });
-                            row.col(|ui| {
-                                ui.label(format!("{}", process.name));
-                            });
+                            let mut selected = row
+                                .col(|ui| {
+                                    ui.add(
+                                        egui::Label::new(format!("{}", process.pid))
+                                            .selectable(false),
+                                    );
+                                })
+                                .1
+                                .clicked();
+                            selected = selected
+                                || row
+                                    .col(|ui| {
+                                        ui.add(
+                                            egui::Label::new(format!("{}", process.name))
+                                                .selectable(false),
+                                        );
+                                    })
+                                    .1
+                                    .clicked();
+
+                            if selected {
+                                process_selected = Some(process);
+                            }
                         });
                     });
 
-                None
+                process_selected
+                    .map(|new_process| PaneResponse::ProcessSelected(new_process.clone()))
             }
         }
     }
@@ -526,18 +510,19 @@ struct State<'a> {
     memory: &'a mut Memory<'a>,
     sections: Option<&'a [Section]>,
     modules: Option<&'a [Module]>,
-    pid: &'a u32,
+    processes: &'a [Process],
+    process: Option<&'a Process>,
     test: &'a Test,
 }
 
 struct App {
-    pid_str: String,
-    pid: Option<u32>,
-    process: Option<OpenProcess>,
+    open_process: Option<OpenProcess>,
+    process: Option<Process>,
 
     project: Project,
     sections: Option<Vec<Section>>,
     modules: Option<Vec<Module>>,
+    processes: Vec<Process>,
 
     test: Box<Test>,
 
@@ -552,14 +537,14 @@ impl Default for App {
         let project = Project::new(Layout::new(default_pane), registry);
 
         Self {
-            pid_str: Default::default(),
-            pid: Default::default(),
+            open_process: Default::default(),
             process: Default::default(),
             project,
             sections: Default::default(),
             modules: Default::default(),
             test: Default::default(),
             tree_options: Default::default(),
+            processes: Default::default(),
         }
     }
 }
@@ -567,34 +552,14 @@ impl Default for App {
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         eprintln!("structure");
-        let mut zelf = Self {
-            pid: None,
-            ..Default::default()
-        };
-
-        zelf.pid_changed(std::process::id());
-
-        zelf
+        Self::default()
     }
 
-    fn update_pid_from_string(&mut self) {
-        if let Ok(new_pid) = u32::from_str(&self.pid_str) {
-            self.pid_changed(new_pid);
-        }
-    }
+    fn process_changed(&mut self, new_process: Process) {
+        let pid = new_process.pid;
+        self.process = Some(new_process);
 
-    fn pid_changed(&mut self, new_pid: u32) {
-        self.pid_str = new_pid.to_string();
-
-        if let Some(existing_pid) = self.pid.as_mut() {
-            if *existing_pid == new_pid {
-                return;
-            }
-        }
-
-        self.pid = Some(new_pid);
-
-        self.process = match OpenProcess::new(new_pid) {
+        self.open_process = match OpenProcess::new(pid) {
             Ok(process) => Some(process),
             Err(err) => {
                 eprintln!("Cannot open process {err}");
@@ -608,14 +573,19 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.test.value += 1;
 
-        if let Some(process) = self.process.as_ref() {
-            self.modules = process.modules().ok();
-            self.sections = process.sections().ok();
+        // TODO(emily): Don't need to do these things each frame
+        {
+            if let Some(process) = self.open_process.as_ref() {
+                self.modules = process.modules().ok();
+                self.sections = process.sections().ok();
+            }
+
+            self.processes = process::processes().unwrap_or_default();
         }
 
         self.project.registry.frame();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Save").clicked() {
@@ -628,40 +598,46 @@ impl eframe::App for App {
                     }
                 })
             });
-            // The central panel the region left after adding TopPanel's and SidePanel's
-            ui.heading("Structure");
-            ui.separator();
+        });
 
-            if ui.text_edit_singleline(&mut self.pid_str).changed() {
-                self.update_pid_from_string();
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // TODO(emily): Either store the Process or hashmap the processes
+            if let Some(process) = &self.process {
+                ui.heading(format!("{} ({})", process.name, process.pid));
+            } else {
+                ui.heading("No process selected");
             }
 
-            if let Some(process) = self.process.as_ref() {
-                // TODO(emily): At the moment we refresh all pages every frame.
-                let mut memory = Memory::new(process);
+            // TODO(emily): At the moment we refresh all pages every frame.
+            let mut memory = if let Some(process) = self.open_process.as_ref() {
+                Memory::new_process(process)
+            } else {
+                Memory::new_null()
+            };
 
-                let mut behavior = TreeBehavior {
-                    options: &mut self.tree_options,
-                    state: State {
-                        registry: &mut self.project.registry,
-                        memory: &mut memory,
-                        sections: self.sections.as_ref().map(|x| x.as_slice()),
-                        modules: self.modules.as_ref().map(|x| x.as_slice()),
-                        pid: self.pid.as_ref().unwrap(),
-                        test: &self.test,
-                    },
-                };
+            let mut behavior = TreeBehavior {
+                options: &mut self.tree_options,
+                state: State {
+                    registry: &mut self.project.registry,
+                    memory: &mut memory,
+                    sections: self.sections.as_ref().map(|x| x.as_slice()),
+                    modules: self.modules.as_ref().map(|x| x.as_slice()),
+                    processes: self.processes.as_slice(),
+                    process: self.process.as_ref(),
+                    test: &self.test,
+                },
+            };
 
-                let layout = &mut self.project.layout;
+            let layout = &mut self.project.layout;
 
-                layout.tree.ui(&mut behavior, ui);
+            layout.tree.ui(&mut behavior, ui);
 
-                if let Some((parent, add_child)) = behavior.options.add_child.take() {
+            if let Some((from, pane_response)) = behavior.options.pane_response.take() {
+                let mut add_child = |registry: &mut Registry, parent, add_child| {
                     let new_child = layout.tree.tiles.insert_pane(match add_child {
                         AddChild::AddressStruct(s, address) => {
-                            let s = s.unwrap_or_else(|| self.project.registry.default_struct());
-                            let address =
-                                address.unwrap_or_else(|| self.project.registry.default_address());
+                            let s = s.unwrap_or_else(|| registry.default_struct());
+                            let address = address.unwrap_or_else(|| registry.default_address());
 
                             Pane::AddressStruct {
                                 r#struct: s,
@@ -695,6 +671,62 @@ impl eframe::App for App {
                             }
                             cur = parent
                         }
+                    }
+                };
+
+                match pane_response {
+                    // TODO(emily): We should probably check whether this address is already somewhere
+                    // and then open that?
+                    PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
+                        address,
+                        s,
+                    )) => {
+                        add_child(
+                            &mut self.project.registry,
+                            from,
+                            AddChild::AddressStruct(s, address),
+                        );
+                    }
+                    PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
+                        let egui_tiles::Tile::Pane(pane) =
+                            self.project.layout.tree.tiles.get_mut(from).unwrap()
+                        else {
+                            panic!("Only expect AddressStructResponse(AddressResponse::Replace) to come from a Pane")
+                        };
+
+                        let Pane::AddressStruct {
+                            r#struct: s,
+                            address: _address,
+                        } = pane
+                        else {
+                            panic!();
+                        };
+                        *s = new_s;
+                    }
+                    PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
+                        action.call(&mut behavior.state);
+                    }
+
+                    PaneResponse::OpenAddress(address) => {
+                        add_child(
+                            &mut self.project.registry,
+                            from,
+                            AddChild::AddressStruct(None, Some(address)),
+                        );
+                    }
+
+                    PaneResponse::OpenStruct(s) => add_child(
+                        &mut self.project.registry,
+                        from,
+                        AddChild::AddressStruct(Some(s), None),
+                    ),
+
+                    PaneResponse::ProcessSelected(new_process) => {
+                        self.process_changed(new_process);
+                    }
+
+                    PaneResponse::AddChild(child) => {
+                        add_child(&mut self.project.registry, from, child)
                     }
                 }
             }

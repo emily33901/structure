@@ -5,7 +5,6 @@ use egui::{ahash::HashMap, vec2, RichText};
 
 use crate::{
     memory::{self, Memory},
-    process::{OpenProcess, Section},
     registry::{Registry, RegistryId},
     Address, AddressResponse, State,
 };

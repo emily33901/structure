@@ -82,7 +82,6 @@ impl OpenProcess {
         }
     }
 
-    // TODO(emily): We want to cache this in some way
     pub(crate) fn read_process_memory(&self, address: usize, buf: &mut [u8]) -> Result<usize> {
         unsafe {
             let buf_ptr = buf.as_mut_ptr();
@@ -241,6 +240,7 @@ impl Drop for OpenProcess {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct Process {
     pub(crate) pid: u32,
     pub(crate) name: String,
