@@ -1,4 +1,3 @@
-
 use egui::{ahash::HashMap, RichText};
 
 use crate::{
@@ -113,7 +112,6 @@ impl<'a> Memory<'a> {
 
                 let dest_len = buffer.len();
 
-                // Do we have this page
                 let page_count = (address.saturating_sub(page_start)) / MEMORY_PAGE_LEN + 1;
 
                 let mut start = 0;

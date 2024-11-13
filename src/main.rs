@@ -1,8 +1,4 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
@@ -219,6 +215,7 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
 #[derive(Debug)]
 enum PaneResponse {
     AddressStructResponse(AddressResponse),
+    // TODO(emily): OpenAddress and OpenStruct can just be AddChild
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
     ProcessSelected(Process),
@@ -464,10 +461,7 @@ impl Pane {
                             selected = selected
                                 || row
                                     .col(|ui| {
-                                        ui.add(
-                                            egui::Label::new(format!("{}", process.name))
-                                                .selectable(false),
-                                        );
+                                        ui.add(egui::Label::new(&process.name).selectable(false));
                                     })
                                     .1
                                     .clicked();
@@ -620,8 +614,8 @@ impl eframe::App for App {
                 state: State {
                     registry: &mut self.project.registry,
                     memory: &mut memory,
-                    sections: self.sections.as_ref().map(|x| x.as_slice()),
-                    modules: self.modules.as_ref().map(|x| x.as_slice()),
+                    sections: self.sections.as_deref(),
+                    modules: self.modules.as_deref(),
                     processes: self.processes.as_slice(),
                     process: self.process.as_ref(),
                     test: &self.test,
@@ -633,47 +627,6 @@ impl eframe::App for App {
             layout.tree.ui(&mut behavior, ui);
 
             if let Some((from, pane_response)) = behavior.options.pane_response.take() {
-                let mut add_child = |registry: &mut Registry, parent, add_child| {
-                    let new_child = layout.tree.tiles.insert_pane(match add_child {
-                        AddChild::AddressStruct(s, address) => {
-                            let s = s.unwrap_or_else(|| registry.default_struct());
-                            let address = address.unwrap_or_else(|| registry.default_address());
-
-                            Pane::AddressStruct {
-                                r#struct: s,
-                                address,
-                            }
-                        }
-                        AddChild::AddressList => Pane::AddressList,
-                        AddChild::StructList => Pane::StructList,
-                        AddChild::ProcessList => Pane::ProcessList {
-                            matching: "".into(),
-                        },
-                    });
-
-                    // Find some parent tabs to insert this into
-                    let mut cur = parent;
-
-                    if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) =
-                        layout.tree.tiles.get_mut(parent)
-                    {
-                        tabs.add_child(new_child);
-                        tabs.set_active(new_child);
-                    } else {
-                        // TODO(emily): Icky copy paste
-                        while let Some(parent) = layout.tree.tiles.parent_of(cur) {
-                            if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(
-                                tabs,
-                            ))) = layout.tree.tiles.get_mut(parent)
-                            {
-                                tabs.add_child(new_child);
-                                tabs.set_active(new_child);
-                            }
-                            cur = parent
-                        }
-                    }
-                };
-
                 match pane_response {
                     // TODO(emily): We should probably check whether this address is already somewhere
                     // and then open that?
@@ -681,7 +634,7 @@ impl eframe::App for App {
                         address,
                         s,
                     )) => {
-                        add_child(
+                        layout.add_child(
                             &mut self.project.registry,
                             from,
                             AddChild::AddressStruct(s, address),
@@ -707,13 +660,13 @@ impl eframe::App for App {
                         action.call(&mut behavior.state);
                     }
                     PaneResponse::OpenAddress(address) => {
-                        add_child(
+                        layout.add_child(
                             &mut self.project.registry,
                             from,
                             AddChild::AddressStruct(None, Some(address)),
                         );
                     }
-                    PaneResponse::OpenStruct(s) => add_child(
+                    PaneResponse::OpenStruct(s) => layout.add_child(
                         &mut self.project.registry,
                         from,
                         AddChild::AddressStruct(Some(s), None),
@@ -722,7 +675,7 @@ impl eframe::App for App {
                         self.process_changed(new_process);
                     }
                     PaneResponse::AddChild(child) => {
-                        add_child(&mut self.project.registry, from, child)
+                        layout.add_child(&mut self.project.registry, from, child)
                     }
                 }
             }
