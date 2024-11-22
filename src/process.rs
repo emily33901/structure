@@ -1,6 +1,7 @@
 use std::{
     ffi::c_void,
     mem::{offset_of, MaybeUninit},
+    thread::current,
 };
 
 use windows::{
@@ -9,7 +10,11 @@ use windows::{
         Foundation::{CloseHandle, HANDLE, STATUS_SUCCESS},
         System::{
             Diagnostics::{
-                Debug::ReadProcessMemory,
+                Debug::{
+                    ReadProcessMemory, IMAGE_NT_HEADERS64, IMAGE_SCN_CNT_CODE,
+                    IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_CNT_UNINITIALIZED_DATA,
+                    IMAGE_SECTION_HEADER,
+                },
                 ToolHelp::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS},
             },
             Kernel::LIST_ENTRY,
@@ -18,18 +23,19 @@ use windows::{
                 MEM_PRIVATE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
                 PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
             },
+            SystemServices::IMAGE_DOS_HEADER,
             Threading::{self, PEB, PEB_LDR_DATA, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
             WindowsProgramming::LDR_DATA_TABLE_ENTRY,
         },
     },
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 pub(crate) struct Module {
     address: usize,
     size: usize,
-    path: String,
+    full_path: String,
 }
 
 #[derive(PartialEq)]
@@ -43,6 +49,8 @@ pub(crate) enum SectionCategory {
     Unknown,
     Heap,
     Private,
+    Code,
+    Data,
 }
 
 impl SectionCategory {
@@ -51,6 +59,8 @@ impl SectionCategory {
             SectionCategory::Unknown => "Unknown",
             SectionCategory::Heap => "Heap",
             SectionCategory::Private => "Private",
+            SectionCategory::Code => "Code",
+            SectionCategory::Data => "Data",
         }
     }
 }
@@ -60,6 +70,10 @@ pub(crate) struct Section {
     pub(crate) len: usize,
 
     pub(crate) category: SectionCategory,
+    pub(crate) name: Option<String>,
+    // TODO(emily): I feel like this could just be an Rc<Module>, would need to figure out
+    // where to keep those around though.
+    pub(crate) module_path: Option<String>,
     typ: SectionType,
 
     read: bool,
@@ -118,7 +132,7 @@ impl OpenProcess {
         }
     }
 
-    fn remote_peb(&self) -> Result<*const PEB_LDR_DATA> {
+    fn remote_peb(&self) -> Result<(usize, PEB_LDR_DATA)> {
         let mut process_information = PROCESS_BASIC_INFORMATION::default();
         let mut out_len = 0_u32;
         unsafe {
@@ -136,42 +150,50 @@ impl OpenProcess {
 
         let peb_address = process_information.PebBaseAddress as usize;
 
-        Ok(self.read_from_process(peb_address + std::mem::offset_of!(PEB, Ldr))?)
+        let ldr_address: usize =
+            self.read_from_process(peb_address + std::mem::offset_of!(PEB, Ldr))?;
+
+        Ok((ldr_address, self.read_from_process(ldr_address)?))
     }
 
     pub(crate) fn modules(&self) -> Result<Vec<Module>> {
-        let remote_peb = self.remote_peb()?;
+        let (remote_peb_address, remote_peb) = self.remote_peb()?;
 
-        let head = unsafe {
-            remote_peb.byte_add(offset_of!(PEB_LDR_DATA, InMemoryOrderModuleList))
-                as *const LIST_ENTRY
-        };
-        let mut current: *const LIST_ENTRY =
-            self.read_from_process(&(unsafe { *head }).Flink as *const _ as usize)?;
+        let head = remote_peb.InMemoryOrderModuleList;
+        let head_address = remote_peb_address + offset_of!(PEB_LDR_DATA, InMemoryOrderModuleList);
+        let mut current_address = head.Flink as usize;
 
         let mut modules = vec![];
 
-        while current != head {
+        while current_address != head_address {
+            let current: LIST_ENTRY = self.read_from_process(current_address)?;
             let entry: LDR_DATA_TABLE_ENTRY = self.read_from_process(unsafe {
-                current.byte_sub(offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks)) as usize
+                current_address - offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks)
             })?;
 
             let module = Module {
                 address: entry.DllBase as usize,
                 size: unsafe { *(&entry.Reserved3[1] as *const _ as *const u32) } as usize,
-                path: {
+                full_path: {
+                    let len = entry.FullDllName.Length as usize / 2;
+                    let mut buffer = vec![0_u16; len];
                     unsafe {
-                        String::from_utf16_lossy(std::slice::from_raw_parts(
-                            entry.FullDllName.Buffer.0,
+                        let mut buffer_bytes = std::slice::from_raw_parts_mut(
+                            buffer.as_mut_ptr() as *mut _,
                             entry.FullDllName.Length as usize,
-                        ))
+                        );
+                        self.read_process_memory(
+                            entry.FullDllName.Buffer.0 as usize,
+                            &mut buffer_bytes,
+                        )?;
+                        String::from_utf16_lossy(std::slice::from_raw_parts(buffer.as_ptr(), len))
                     }
                 },
             };
 
             modules.push(module);
 
-            current = entry.InMemoryOrderLinks.Flink;
+            current_address = entry.InMemoryOrderLinks.Flink as usize;
         }
 
         Ok(modules)
@@ -221,6 +243,8 @@ impl OpenProcess {
                         || memory.Protect.contains(PAGE_EXECUTE_READWRITE),
                     copy_on_write: memory.Protect.contains(PAGE_WRITECOPY),
                     guard: memory.Protect.contains(PAGE_EXECUTE),
+                    name: None,
+                    module_path: None,
                 };
 
                 sections.push(section);
@@ -230,6 +254,71 @@ impl OpenProcess {
         }
 
         Ok(sections)
+    }
+
+    pub(crate) fn module_sections(
+        &self,
+        modules: &[Module],
+        sections: &mut [Section],
+    ) -> Result<()> {
+        for module in modules {
+            let dos_header: IMAGE_DOS_HEADER = self.read_from_process(module.address)?;
+            let nt_header: IMAGE_NT_HEADERS64 =
+                self.read_from_process(module.address + dos_header.e_lfanew as usize)?;
+
+            let mut section_headers = vec![
+                IMAGE_SECTION_HEADER::default();
+                nt_header.FileHeader.NumberOfSections as usize
+            ];
+
+            let read_len_bytes = self.read_process_memory(
+                module.address
+                    + dos_header.e_lfanew as usize
+                    + std::mem::size_of::<IMAGE_NT_HEADERS64>(),
+                unsafe {
+                    std::slice::from_raw_parts_mut(
+                        section_headers.as_mut_ptr() as *mut _ as *mut _,
+                        section_headers.len() * std::mem::size_of::<IMAGE_SECTION_HEADER>(),
+                    )
+                },
+            )?;
+
+            let read_section_headers = read_len_bytes / std::mem::size_of::<IMAGE_SECTION_HEADER>();
+
+            for header in &section_headers[..read_section_headers] {
+                let module_section_address = module.address + header.VirtualAddress as usize;
+                let section_virtual_size = unsafe { header.Misc.VirtualSize } as usize;
+
+                for section in sections
+                    .iter_mut()
+                    .skip_while(|section| section.address < module.address)
+                {
+                    if !(module_section_address >= section.address
+                        && module_section_address < (section.address + section.len)
+                        && header.VirtualAddress as usize + section_virtual_size <= module.size)
+                    {
+                        continue;
+                    }
+
+                    if header.Characteristics.contains(IMAGE_SCN_CNT_CODE) {
+                        section.category = SectionCategory::Code;
+                    } else if header
+                        .Characteristics
+                        .contains(IMAGE_SCN_CNT_INITIALIZED_DATA)
+                        || header
+                            .Characteristics
+                            .contains(IMAGE_SCN_CNT_UNINITIALIZED_DATA)
+                    {
+                        section.category = SectionCategory::Data
+                    }
+
+                    section.name = Some(String::from_utf8_lossy(&header.Name).to_string());
+                    section.module_path = Some(module.full_path.clone());
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 impl Drop for OpenProcess {
