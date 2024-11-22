@@ -1,6 +1,17 @@
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
+
 use egui_tiles::{Container, TileId, Tiles};
 
-use crate::{registry::Registry, AddChild, Pane, State};
+use crate::{node::Struct, registry::Registry, AddChild, Pane, State};
+
+pub(crate) enum Collapsed {
+    Collapsed,
+    Expanded,
+}
 
 pub(crate) struct Layout {
     pub(crate) tree: egui_tiles::Tree<crate::Pane>,

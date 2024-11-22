@@ -1,5 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use egui::UiBuilder;
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
@@ -7,12 +8,14 @@ use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, OpenProcess, Process, Section};
 use project::{Layout, Project};
 use registry::Registry;
+use rtti::RttiCache;
 
 mod memory;
 mod node;
 mod process;
 mod project;
 mod registry;
+mod rtti;
 mod storage;
 
 #[derive(Debug)]
@@ -54,9 +57,12 @@ impl Address {
     }
 }
 
+const TEST_CONSTANT_STRING: &str = "Nice data section string";
+
 struct Test {
     value: u64,
     test: String,
+    test_constant_string: &'static str,
 }
 
 impl Default for Test {
@@ -64,6 +70,7 @@ impl Default for Test {
         Self {
             value: 0,
             test: "Nice test string".into(),
+            test_constant_string: &TEST_CONSTANT_STRING,
         }
     }
 }
@@ -500,8 +507,9 @@ enum AddressResponse {
 struct State<'a> {
     registry: &'a mut Registry,
     memory: &'a mut Memory<'a>,
-    sections: Option<&'a [Section]>,
-    modules: Option<&'a [Module]>,
+    sections: &'a [Section],
+    modules: &'a [Module],
+    rtti: &'a mut RttiCache,
     processes: &'a [Process],
     process: Option<&'a Process>,
     test: &'a Test,
@@ -514,6 +522,7 @@ struct App {
     project: Project,
     sections: Option<Vec<Section>>,
     modules: Option<Vec<Module>>,
+    rtti: RttiCache,
     processes: Vec<Process>,
 
     test: Box<Test>,
@@ -537,6 +546,7 @@ impl Default for App {
             test: Default::default(),
             tree_options: Default::default(),
             processes: Default::default(),
+            rtti: Default::default(),
         }
     }
 }
@@ -572,6 +582,11 @@ impl eframe::App for App {
             if let Some(process) = self.open_process.as_ref() {
                 self.modules = process.modules().ok();
                 self.sections = process.sections().ok();
+
+                if let Some((modules, sections)) = self.modules.as_ref().zip(self.sections.as_mut())
+                {
+                    process.module_sections(modules, sections).unwrap();
+                }
             }
 
             self.processes = process::processes().unwrap_or_default();
@@ -595,7 +610,6 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // TODO(emily): Either store the Process or hashmap the processes
             if let Some(process) = &self.process {
                 ui.heading(format!("{} ({})", process.name, process.pid));
             } else {
@@ -614,8 +628,9 @@ impl eframe::App for App {
                 state: State {
                     registry: &mut self.project.registry,
                     memory: &mut memory,
-                    sections: self.sections.as_deref(),
-                    modules: self.modules.as_deref(),
+                    sections: self.sections.as_deref().unwrap_or(&[]),
+                    modules: self.modules.as_deref().unwrap_or(&[]),
+                    rtti: &mut self.rtti,
                     processes: self.processes.as_slice(),
                     process: self.process.as_ref(),
                     test: &self.test,

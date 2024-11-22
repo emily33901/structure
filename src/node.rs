@@ -47,7 +47,9 @@ impl Node {
     fn height(&self, ui: &egui::Ui) -> f32 {
         let item_spacing_y = ui.style().spacing.item_spacing.y;
         match self {
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 => NODE_UNIT_SIZE + 2.0 * item_spacing_y,
+            Node::U8 | Node::U16 | Node::U32 | Node::U64 => {
+                NODE_UNIT_ROW_HEIGHT + 2.0 * item_spacing_y
+            }
             Node::Struct(s) | Node::Pointer(s) => s.borrow().row_heights(ui).sum(),
         }
     }
@@ -196,6 +198,9 @@ impl Node {
         // TODO(emily): In here we are padding by padding the strings which works because they are monospace.
         // Ideally we should figure out how long each bit SHOULD be, given 8 bytes and then work backwards.
 
+        // TODO(emily): The above is extra important once we have specific UI for each node type. As each node
+        // needs to where to place its value, which should be in alignment with none_ui
+
         memory.get(address, &mut buffer);
 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
@@ -254,7 +259,7 @@ impl Node {
 
             {
                 let bytes = &buffer;
-                if let Some(r) = memory::disect_bytes(sections, registry, bytes, ui) {
+                if let Some(r) = memory::disect_bytes(state, bytes, ui) {
                     response = Some(r);
                 }
             }
@@ -334,15 +339,21 @@ enum MakeNodeAction {
     Remove(usize),
 }
 
-const NODE_UNIT_SIZE: f32 = 15.0;
+const NODE_UNIT_ROW_HEIGHT: f32 = 15.0;
 
 #[derive(Default)]
 pub(crate) struct StructUiFlags {
     pub(crate) top_level: bool,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct StructLayout {
+    collapse: HashMap<usize, bool>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Struct {
+    pub(crate) layout: StructLayout,
     pub(crate) size: usize,
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
     pub(crate) name: String,
@@ -351,6 +362,7 @@ pub(crate) struct Struct {
 impl Default for Struct {
     fn default() -> Self {
         Self {
+            layout: Default::default(),
             size: 64,
             nodes: Default::default(),
             name: "Default struct".into(),
@@ -588,11 +600,11 @@ impl<'a> Iterator for StructRowHeightIterator<'a> {
             let node = node.borrow();
             let row_count = node.row_count() as f32;
             self.cur_offset += node.byte_size();
-            return Some(row_count * NODE_UNIT_SIZE + 2.0 * row_count * self.item_spacing_y);
+            return Some(row_count * NODE_UNIT_ROW_HEIGHT + 2.0 * row_count * self.item_spacing_y);
         } else {
             self.cur_offset += none_ui_rules(cur_offset);
         }
 
-        Some(NODE_UNIT_SIZE)
+        Some(NODE_UNIT_ROW_HEIGHT)
     }
 }
