@@ -1,7 +1,11 @@
+use std::mem::{offset_of, MaybeUninit};
+
+use anyhow::Result;
 use egui::{ahash::HashMap, RichText};
+use windows::Win32::System::Threading::PEB_LDR_DATA;
 
 use crate::{
-    process::{OpenProcess, Section},
+    process::{OpenProcess, Section, SectionCategory},
     registry::Registry,
     AddressResponse,
 };
@@ -24,9 +28,57 @@ pub(crate) fn ascii_byte(byte: &u8) -> char {
     }
 }
 
+pub(crate) fn section_for_address(sections: &[Section], address: usize) -> Option<&Section> {
+    let Ok(index) = sections.binary_search_by(|s| {
+        if address > s.address && address < (s.address + s.len) {
+            std::cmp::Ordering::Equal
+        } else {
+            s.address.cmp(&address)
+        }
+    }) else {
+        return None;
+    };
+
+    Some(&sections[index])
+}
+
+pub(crate) fn is_vtable(address: usize, memory: &mut Memory<'_>, sections: &[Section]) -> bool {
+    let Some(section) = section_for_address(sections, address) else {
+        return false;
+    };
+
+    if !matches!(section.category, SectionCategory::Data) {
+        return false;
+    }
+
+    let vfunc_address = memory.read(address);
+
+    // See if the first pointer points to code
+    let Some(func_section) = section_for_address(sections, vfunc_address) else {
+        return false;
+    };
+
+    if !matches!(func_section.category, SectionCategory::Code) {
+        return false;
+    }
+
+    // Then see if the RTTI descriptor points back to the vtable
+    let Some(rtti) = rtti_type_descriptor(memory.read(address - 8), memory) else {
+        return false;
+    };
+
+    // TODO(emily): This is wrong, this is the type_info vtable ptr
+    // if rtti.vtable != address {
+    //     return false;
+    // }
+
+    true
+}
+
 pub(crate) fn disect_bytes(
     sections: Option<&[Section]>,
     registry: &mut Registry,
+    memory: &mut Memory<'_>,
     bytes: &[u8],
     ui: &mut egui::Ui,
 ) -> Option<AddressResponse> {
@@ -39,36 +91,41 @@ pub(crate) fn disect_bytes(
         ui.add(egui::Label::new(RichText::new(&format!("0x{:X}", value))));
 
         if value != 0 {
-            if let Some(sections) = sections {
-                if let Ok(index) = sections.binary_search_by(|s| {
-                    if value > s.address && value < (s.address + s.len) {
-                        std::cmp::Ordering::Equal
-                    } else {
-                        s.address.cmp(&value)
-                    }
-                }) {
-                    let section = &sections[index];
-                    ui.add(
-                        egui::Label::new(RichText::new(format!(
-                            "-> <{}>",
-                            section.category.as_str(),
-                        )))
-                        .selectable(false),
-                    );
+            let Some(sections) = sections else { return };
+            let Some(section) = section_for_address(sections, value) else {
+                return;
+            };
 
-                    if ui
-                        .add(
-                            egui::Label::new(RichText::new(&format!("{:016X}", value)))
-                                .sense(egui::Sense::click()),
-                        )
-                        .clicked()
-                    {
-                        response = Some(AddressResponse::AddressStruct(
-                            Some(registry.find_or_register_address(value.into())),
-                            None,
-                        ));
-                    }
-                }
+            ui.add(
+                egui::Label::new(format!("-> <{}>", section.category.as_str(),)).selectable(false),
+            );
+
+            let address_text = if let Some(module_path) = section.module_path.as_ref() {
+                format!(
+                    "{}.{:016X}",
+                    std::path::Path::new(module_path)
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    value
+                )
+            } else {
+                format!("{:016X}", value)
+            };
+
+            let r =
+                ui.add(egui::Label::new(RichText::new(&address_text)).sense(egui::Sense::click()));
+
+            if r.clicked() {
+                response = Some(AddressResponse::AddressStruct(
+                    Some(registry.find_or_register_address(value.into())),
+                    None,
+                ));
+            }
+
+            if is_vtable(value, memory, sections) {
+                ui.label(format!("vtable"));
             }
         }
     });
@@ -141,4 +198,152 @@ impl<'a> Memory<'a> {
             }
         }
     }
+
+    fn read<T: Sized>(&mut self, address: usize) -> T {
+        let mut value: MaybeUninit<T> = MaybeUninit::uninit();
+
+        let slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                value.as_mut_ptr() as *mut _ as *mut u8,
+                std::mem::size_of::<T>(),
+            )
+        };
+
+        self.get(address, slice);
+
+        unsafe { value.assume_init() }
+    }
+}
+
+#[repr(C)]
+struct RTTICompleteObjectLocator {
+    signature: u32,
+    offset: u32,
+    constructor_displacement_offset: u32,
+    type_descriptor_offset: u32,
+    class_descriptor_offset: u32,
+    self_offset: u32,
+}
+
+#[repr(C)]
+struct RTTITypeDescriptor {
+    vtable: usize,
+    spare: usize,
+    name_bytes: i8,
+}
+
+#[repr(C)]
+struct RTTIClassHierarchyDescriptor {
+    signature: u32,
+    attributes: u32,
+    base_class_count: u32,
+    array_offset: u32,
+}
+
+#[repr(C)]
+struct RTTIObjectLocation {
+    mdisp: u32,
+    pdisp: u32,
+    vdisp: u32,
+}
+
+#[repr(C)]
+struct RTTIBaseClassDescriptor {
+    type_descriptor_offset: u32,
+    contained_bases: u32,
+    object_location: RTTIObjectLocation,
+    attributes: u32,
+    class_descriptor_offset: u32,
+}
+
+pub(crate) struct Rtti {
+    vtable_address: usize,
+    names: Vec<String>,
+}
+
+pub(crate) fn rtti_type_descriptor(
+    address: usize,
+    memory: &mut Memory<'_>,
+) -> Option<RTTITypeDescriptor> {
+    let complete_object_locator: RTTICompleteObjectLocator = memory.read(address);
+
+    if complete_object_locator.self_offset == 0
+        || complete_object_locator.class_descriptor_offset == 0
+    {
+        return None;
+    }
+
+    let base_address = address - complete_object_locator.self_offset as usize;
+
+    let type_descriptor_address =
+        base_address + complete_object_locator.type_descriptor_offset as usize;
+
+    let type_descriptor: RTTITypeDescriptor = memory.read(type_descriptor_address);
+
+    Some(type_descriptor)
+}
+
+pub(crate) fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
+    let complete_object_locator: RTTICompleteObjectLocator = memory.read(address);
+
+    if complete_object_locator.self_offset == 0
+        || complete_object_locator.class_descriptor_offset == 0
+    {
+        return None;
+    }
+
+    let base_address = address - complete_object_locator.self_offset as usize;
+
+    let type_descriptor_address =
+        base_address + complete_object_locator.type_descriptor_offset as usize;
+
+    let type_descriptor: RTTITypeDescriptor = memory.read(type_descriptor_address);
+
+    let class_hierarchy_descriptor_address =
+        base_address + complete_object_locator.class_descriptor_offset as usize;
+
+    let class_hierarchy_descriptor: RTTIClassHierarchyDescriptor =
+        memory.read(class_hierarchy_descriptor_address);
+
+    let base_class_array_address = base_address + class_hierarchy_descriptor.array_offset as usize;
+
+    let mut base_class_offsets = vec![0_u32; class_hierarchy_descriptor.base_class_count as usize];
+
+    let mut base_class_offsets_bytes = unsafe {
+        std::slice::from_raw_parts_mut(
+            base_class_offsets.as_mut_ptr() as *mut u8,
+            class_hierarchy_descriptor.base_class_count as usize * std::mem::size_of::<u32>(),
+        )
+    };
+
+    memory.get(base_class_array_address, &mut base_class_offsets_bytes);
+
+    let mut rtti = Rtti {
+        vtable_address: type_descriptor.vtable,
+        names: vec![],
+    };
+
+    for base_class_offset in base_class_offsets {
+        let base_class_descriptor: RTTIBaseClassDescriptor =
+            memory.read(base_address + base_class_offset as usize);
+
+        // Read some memory that contains the name in it
+
+        let mut buffer = [0_u8; 1000];
+
+        let type_descriptor_address =
+            base_address + base_class_descriptor.type_descriptor_offset as usize;
+        memory.get(
+            type_descriptor_address + offset_of!(RTTITypeDescriptor, name_bytes),
+            &mut buffer,
+        );
+
+        rtti.names.push(
+            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr() as *const _) }
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+
+    Some(rtti)
 }
