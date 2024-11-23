@@ -1,12 +1,7 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::{Rc, Weak},
-};
 
 use egui_tiles::{Container, TileId, Tiles};
 
-use crate::{node::Struct, registry::Registry, AddChild, Pane, State};
+use crate::{registry::Registry, AddChild, Pane};
 
 pub(crate) enum Collapsed {
     Collapsed,

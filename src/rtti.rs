@@ -3,7 +3,6 @@ use std::{
     mem::offset_of,
 };
 
-use windows::Win32::System::Diagnostics::Debug::UnDecorateSymbolName;
 
 use crate::memory::Memory;
 

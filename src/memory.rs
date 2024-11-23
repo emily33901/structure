@@ -1,12 +1,9 @@
-use std::mem::{offset_of, MaybeUninit};
+use std::mem::MaybeUninit;
 
-use anyhow::Result;
 use egui::{ahash::HashMap, RichText};
-use windows::Win32::System::Threading::PEB_LDR_DATA;
 
 use crate::{
     process::{OpenProcess, Section, SectionCategory},
-    registry::Registry,
     rtti::Rtti,
     AddressResponse, State,
 };

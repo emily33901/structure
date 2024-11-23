@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use egui::{Theme, UiBuilder};
+use egui::Theme;
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
@@ -564,10 +564,6 @@ impl Default for App {
 
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
-        use egui::FontFamily;
-        use egui::FontId;
-        use egui::TextStyle;
-
         cc.egui_ctx.set_theme(Theme::Dark);
 
         let mut fonts = egui::FontDefinitions::default();

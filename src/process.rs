@@ -1,7 +1,6 @@
 use std::{
     ffi::c_void,
     mem::{offset_of, MaybeUninit},
-    thread::current,
 };
 
 use windows::{
@@ -30,7 +29,7 @@ use windows::{
     },
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
 pub(crate) struct Module {
     address: usize,
