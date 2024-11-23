@@ -24,6 +24,7 @@ derive_more = "0.99"
 iced-x86 = "1.21.0"
 egui_tiles = { version = "0.10.1", features = ["serde"] }
 rand = "0.8.5"
+symbolic-demangle = { version = "12.12.1", features = ["msvc", "cpp"] }
 
 [dependencies.windows]
 version = "0.58"
@@ -42,4 +43,5 @@ features = [
     "Win32_System_Kernel",
     "Win32_System_WindowsProgramming",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",
 ]

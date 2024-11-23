@@ -3,6 +3,8 @@ use std::{
     mem::offset_of,
 };
 
+use windows::Win32::System::Diagnostics::Debug::UnDecorateSymbolName;
+
 use crate::memory::Memory;
 
 #[derive(Default)]
@@ -69,7 +71,7 @@ struct RTTIBaseClassDescriptor {
 }
 
 pub(crate) struct Rtti {
-    names: Vec<String>,
+    pub(crate) names: Vec<String>,
 }
 
 pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
@@ -122,12 +124,17 @@ pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
             &mut buffer,
         );
 
-        rtti.names.push(
-            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr() as *const _) }
-                .to_string_lossy()
-                .to_string(),
-        );
+        let type_name =
+            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr() as *const _) }.to_string_lossy();
+
+        rtti.names.push(demangle_msvc_typeinfo_name(&type_name));
     }
 
     Some(rtti)
+}
+
+fn demangle_msvc_typeinfo_name(name: &str) -> String {
+    let name_as_destructor = format!("?{}", &name[4..]);
+    let name = symbolic_demangle::demangle(&name_as_destructor);
+    name.to_string()
 }

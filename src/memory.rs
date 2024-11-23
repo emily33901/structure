@@ -7,6 +7,7 @@ use windows::Win32::System::Threading::PEB_LDR_DATA;
 use crate::{
     process::{OpenProcess, Section, SectionCategory},
     registry::Registry,
+    rtti::Rtti,
     AddressResponse, State,
 };
 
@@ -42,37 +43,36 @@ pub(crate) fn section_for_address(sections: &[Section], address: usize) -> Optio
     Some(&sections[index])
 }
 
-pub(crate) fn is_vtable(state: &mut State, address: usize) -> bool {
-    let Some(section) = section_for_address(state.sections, address) else {
-        return false;
-    };
+pub(crate) fn rtti_if_address_is_vtable<'a>(
+    state: &'a mut State<'_>,
+    address: usize,
+) -> Option<&'a Rtti> {
+    let section = section_for_address(state.sections, address)?;
 
     if !matches!(section.category, SectionCategory::Data) {
-        return false;
+        return None;
     }
 
     let vfunc_address = state.memory.read(address);
 
     // See if the first pointer points to code
-    let Some(func_section) = section_for_address(state.sections, vfunc_address) else {
-        return false;
-    };
+    let func_section = section_for_address(state.sections, vfunc_address)?;
 
     if !matches!(func_section.category, SectionCategory::Code) {
-        return false;
+        return None;
     }
 
     // Then see if the RTTI descriptor points back to the vtable
-    let Some(rtti) = state.rtti.get(state.memory.read(address - 8), state.memory) else {
-        return false;
-    };
+    Some(
+        state
+            .rtti
+            .get(state.memory.read(address - 8), state.memory)?,
+    )
 
     // TODO(emily): This is wrong, this is the type_info vtable ptr
     // if rtti.vtable != address {
     //     return false;
     // }
-
-    true
 }
 
 pub(crate) fn disect_bytes(
@@ -88,42 +88,41 @@ pub(crate) fn disect_bytes(
         ui.add(egui::Label::new(RichText::new(&format!("{}", value))));
         ui.add(egui::Label::new(RichText::new(&format!("0x{:X}", value))));
 
-        if value != 0 {
-            let Some(section) = section_for_address(state.sections, value) else {
-                return;
-            };
+        if value == 0 {
+            return;
+        }
 
-            ui.add(
-                egui::Label::new(format!("-> <{}>", section.category.as_str(),)).selectable(false),
-            );
+        let Some(section) = section_for_address(state.sections, value) else {
+            return;
+        };
 
-            let address_text = if let Some(module_path) = section.module_path.as_ref() {
-                format!(
-                    "{}.{:016X}",
-                    std::path::Path::new(module_path)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap(),
-                    value
-                )
-            } else {
-                format!("{:016X}", value)
-            };
+        ui.add(egui::Label::new(format!("-> <{}>", section.category.as_str(),)).selectable(false));
 
-            let r =
-                ui.add(egui::Label::new(RichText::new(&address_text)).sense(egui::Sense::click()));
+        let address_text = if let Some(module_path) = section.module_path.as_ref() {
+            format!(
+                "{}.{:016X}",
+                std::path::Path::new(module_path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                value
+            )
+        } else {
+            format!("{:016X}", value)
+        };
 
-            if r.clicked() {
-                response = Some(AddressResponse::AddressStruct(
-                    Some(state.registry.find_or_register_address(value.into())),
-                    None,
-                ));
-            }
+        let r = ui.add(egui::Label::new(RichText::new(&address_text)).sense(egui::Sense::click()));
 
-            if is_vtable(state, value) {
-                ui.label(format!("vtable"));
-            }
+        if r.clicked() {
+            response = Some(AddressResponse::AddressStruct(
+                Some(state.registry.find_or_register_address(value.into())),
+                None,
+            ));
+        }
+
+        if let Some(rtti) = rtti_if_address_is_vtable(state, value) {
+            ui.label(rtti.names.join(" : "));
         }
     });
 
