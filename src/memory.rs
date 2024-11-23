@@ -84,7 +84,7 @@ pub(crate) fn disect_bytes(
 
     let value = *interpret_as::<usize>(bytes);
 
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add(egui::Label::new(RichText::new(&format!("{}", value))));
         ui.add(egui::Label::new(RichText::new(&format!("0x{:X}", value))));
 
