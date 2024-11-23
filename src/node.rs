@@ -161,7 +161,7 @@ impl Node {
             Node::Struct(s) => {
                 let (bytes, r) = ui
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        ui.add_space(20.0);
+                        ui.add_space(40.0);
 
                         s.clone().borrow().ui(
                             s.clone(),
@@ -182,7 +182,7 @@ impl Node {
 
                 let (bytes, r) = ui
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        ui.add_space(20.0);
+                        ui.add_space(40.0);
 
                         s.clone().borrow().ui(
                             s.clone(),

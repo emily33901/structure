@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use egui::UiBuilder;
+use egui::{Theme, UiBuilder};
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
@@ -564,6 +564,38 @@ impl Default for App {
 
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
+        use egui::FontFamily;
+        use egui::FontId;
+        use egui::TextStyle;
+
+        cc.egui_ctx.set_theme(Theme::Dark);
+
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "Geist".to_owned(),
+            egui::FontData::from_static(include_bytes!("../resource/Geist-Light.ttf")),
+        );
+
+        fonts.font_data.insert(
+            "Iosevka".to_owned(),
+            egui::FontData::from_static(include_bytes!("../resource/NotoSansMono-Regular.ttf")),
+        );
+
+        // Put my font first (highest priority) for proportional text:
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Geist".to_owned());
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "Iosevka".to_owned());
+
+        cc.egui_ctx.set_fonts(fonts);
+
         eprintln!("structure");
         Self::default()
     }
