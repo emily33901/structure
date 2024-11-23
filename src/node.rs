@@ -44,13 +44,21 @@ impl Node {
         }
     }
 
-    fn height(&self, ui: &egui::Ui) -> f32 {
-        let item_spacing_y = ui.style().spacing.item_spacing.y;
+    fn height(&self, item_spacing_y: f32) -> f32 {
         match self {
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 => {
-                NODE_UNIT_ROW_HEIGHT + 2.0 * item_spacing_y
+            Node::U8 | Node::U16 | Node::U32 | Node::U64 => NODE_UNIT_ROW_HEIGHT,
+            Node::Struct(s) | Node::Pointer(s) => {
+                // NOTE(emily): Here we account for the extra padding in the egui table.
+
+                let row_heights: f32 = s
+                    .borrow()
+                    .row_heights(item_spacing_y)
+                    .map(|x| x + item_spacing_y)
+                    .sum();
+
+                let extra = 15.0 + item_spacing_y;
+                row_heights + extra
             }
-            Node::Struct(s) | Node::Pointer(s) => s.borrow().row_heights(ui).sum(),
         }
     }
 
@@ -82,14 +90,14 @@ impl Node {
             // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
             // Don't just copy paste it.
             Node::Struct(s) => {
-                ui.label("S");
+                ui.label("Struct");
 
                 s.clone()
                     .borrow()
                     .ui(s.clone(), StructUiFlags::default(), ui, address, state)
             }
             Node::Pointer(s) => {
-                ui.label("P");
+                ui.label("Pointer");
 
                 let mut buffer = [0; 8];
                 state.memory.get(address, &mut buffer);
@@ -124,7 +132,7 @@ impl Node {
         offset_in_parent: usize,
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
-        let height = self.height(ui);
+        let height = self.height(ui.spacing().item_spacing.y);
 
         let (bytes, response) = ui
             .allocate_ui_with_layout(
@@ -183,15 +191,6 @@ impl Node {
     ) -> (usize, Option<AddressResponse>) {
         let mut response = None;
 
-        let State {
-            memory,
-            registry,
-            sections,
-            ..
-        } = state;
-
-        let sections = *sections;
-
         let size = size.unwrap_or(none_ui_rules(offset_in_parent));
         let mut buffer = vec![0; size];
 
@@ -201,7 +200,7 @@ impl Node {
         // TODO(emily): The above is extra important once we have specific UI for each node type. As each node
         // needs to where to place its value, which should be in alignment with none_ui
 
-        memory.get(address, &mut buffer);
+        state.memory.get(address, &mut buffer);
 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             {
@@ -371,12 +370,12 @@ impl Default for Struct {
 }
 
 impl Struct {
-    fn row_heights(&self, ui: &egui::Ui) -> StructRowHeightIterator<'_> {
+    fn row_heights(&self, item_spacing_y: f32) -> StructRowHeightIterator<'_> {
         StructRowHeightIterator {
             nodes: &self.nodes,
             cur_offset: 0,
             size: self.size,
-            item_spacing_y: ui.spacing().item_spacing.y,
+            item_spacing_y,
         }
     }
 
@@ -408,136 +407,143 @@ impl Struct {
 
         let max_height = ui.available_height();
 
-        {
-            egui::ComboBox::new((ui.id(), address, &self.name), "")
-                .selected_text(&self.name)
-                .show_ui(ui, |ui| {
-                    for (id, (name, s)) in &state.registry.structs_by_name {
-                        if ui.button(format!("{name} ({id})")).clicked() {
-                            response = Some(AddressResponse::Replace(s.clone()))
-                        }
-                    }
-
-                    ui.separator();
-
-                    if ui.button(format!("New struct")).clicked() {
-                        response = Some(AddressResponse::Replace(state.registry.default_struct()))
-                    }
-                });
-
-            let mut size = self.size;
-
-            if ui
-                .add(egui::DragValue::new(&mut size).range(8..=8192))
-                .changed()
-            {
-                // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
-                response = Some(
-                    StructAction::new({
-                        let zelf = self_rc.clone();
-                        move |_| {
-                            zelf.borrow_mut().size = size;
-                        }
-                    })
-                    .into(),
-                );
-            }
-        }
-
-        let mut action = None;
-
-        ui.scope(|ui| {
-            let style = ui.style_mut();
-            style.override_text_style = Some(egui::TextStyle::Monospace);
-
-            let heights = self.row_heights(&ui);
-
-            egui_extras::TableBuilder::new(ui)
-                .id_salt((address, &self.name))
-                .vscroll(flags.top_level)
-                .max_scroll_height(max_height)
-                .column(egui_extras::Column::remainder())
-                .sense(egui::Sense::click())
-                .body(|body| {
-                    // body.ui_mut().style_mut().spacing.item_spacing = vec2(0.0, 0.0);
-
-                    body.heterogeneous_rows(heights, |mut row| {
-                        // TODO(emily): You need to get the number of bytes in that this row would logically be.
-                        // probably by iterating like we are doing below but for everything up to this index
-                        // maybe cache it so that its not abysmally slow towards the end.
-                        let index = row.index();
-                        let offset = self.bytes_for_row(index);
-
-                        let (_, r) = row.col(|ui| {
-                            let new_address = address.wrapping_add(offset);
-
-                            let (bytes, r) = if let Some(node) = self.nodes.get(&offset) {
-                                node.borrow_mut().ui(ui, new_address, offset, state)
-                            } else {
-                                Node::none_ui(ui, new_address, offset, None, state)
-                            };
-
-                            if let Some(r) = r {
-                                response = Some(r);
-                            }
-                        });
-
-                        r.context_menu(|ui| {
-                            let address = address + offset;
-
-                            if ui.button("Open address in new window").clicked() {
-                                response = Some(AddressResponse::AddressStruct(
-                                    Some(
-                                        state
-                                            .registry
-                                            .find_or_register_address(Address::from(address)),
-                                    ),
-                                    None,
-                                ))
-                            }
-
-                            if let Some(node) = self.nodes.get(&offset) {
-                                ui.separator();
-                                if let Some(r) = node.borrow().context_menu(
-                                    state.registry,
-                                    state.memory,
-                                    address,
-                                    ui,
-                                ) {
-                                    response = Some(r);
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                {
+                    egui::ComboBox::new((ui.id(), address, &self.name), "")
+                        .selected_text(&self.name)
+                        .show_ui(ui, |ui| {
+                            for (id, (name, s)) in &state.registry.structs_by_name {
+                                if ui.button(format!("{name} ({id})")).clicked() {
+                                    response = Some(AddressResponse::Replace(s.clone()))
                                 }
                             }
 
                             ui.separator();
-                            action = Node::make_node_options(ui, state.registry, offset);
+
+                            if ui.button(format!("New struct")).clicked() {
+                                response =
+                                    Some(AddressResponse::Replace(state.registry.default_struct()))
+                            }
+                        });
+
+                    let mut size = self.size;
+
+                    if ui
+                        .add(egui::DragValue::new(&mut size).range(8..=8192))
+                        .changed()
+                    {
+                        // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
+                        response = Some(
+                            StructAction::new({
+                                let zelf = self_rc.clone();
+                                move |_| {
+                                    zelf.borrow_mut().size = size;
+                                }
+                            })
+                            .into(),
+                        );
+                    }
+                }
+
+                ui.end_row();
+            });
+
+            let mut action = None;
+
+            ui.scope(|ui| {
+                let style = ui.style_mut();
+                style.override_text_style = Some(egui::TextStyle::Monospace);
+
+                let heights = self.row_heights(ui.spacing().item_spacing.y);
+
+                egui_extras::TableBuilder::new(ui)
+                    .id_salt((address, &self.name))
+                    .vscroll(flags.top_level)
+                    .max_scroll_height(max_height)
+                    .column(egui_extras::Column::remainder())
+                    .sense(egui::Sense::click())
+                    .body(|body| {
+                        // body.ui_mut().style_mut().spacing.item_spacing = vec2(0.0, 0.0);
+
+                        body.heterogeneous_rows(heights, |mut row| {
+                            // TODO(emily): You need to get the number of bytes in that this row would logically be.
+                            // probably by iterating like we are doing below but for everything up to this index
+                            // maybe cache it so that its not abysmally slow towards the end.
+                            let index = row.index();
+                            let offset = self.bytes_for_row(index);
+
+                            let (_, r) = row.col(|ui| {
+                                let new_address = address.wrapping_add(offset);
+
+                                let (bytes, r) = if let Some(node) = self.nodes.get(&offset) {
+                                    node.borrow_mut().ui(ui, new_address, offset, state)
+                                } else {
+                                    Node::none_ui(ui, new_address, offset, None, state)
+                                };
+
+                                if let Some(r) = r {
+                                    response = Some(r);
+                                }
+                            });
+
+                            r.context_menu(|ui| {
+                                let address = address + offset;
+
+                                if ui.button("Open address in new window").clicked() {
+                                    response = Some(AddressResponse::AddressStruct(
+                                        Some(
+                                            state
+                                                .registry
+                                                .find_or_register_address(Address::from(address)),
+                                        ),
+                                        None,
+                                    ))
+                                }
+
+                                if let Some(node) = self.nodes.get(&offset) {
+                                    ui.separator();
+                                    if let Some(r) = node.borrow().context_menu(
+                                        state.registry,
+                                        state.memory,
+                                        address,
+                                        ui,
+                                    ) {
+                                        response = Some(r);
+                                    }
+                                }
+
+                                ui.separator();
+                                action = Node::make_node_options(ui, state.registry, offset);
+                            });
                         });
                     });
-                });
-        });
+            });
 
-        match action {
-            Some(action) => {
-                response = Some(
-                    StructAction::new({
-                        let zelf = self_rc.clone();
-                        move |_registry| {
-                            let mut zelf = zelf.borrow_mut();
-                            match action {
-                                MakeNodeAction::Add(node, offset) => {
-                                    zelf.nodes.insert(offset, RefCell::new(node));
-                                }
-                                MakeNodeAction::Remove(offset) => {
-                                    zelf.nodes.remove(&offset);
+            match action {
+                Some(action) => {
+                    response = Some(
+                        StructAction::new({
+                            let zelf = self_rc.clone();
+                            move |_registry| {
+                                let mut zelf = zelf.borrow_mut();
+                                match action {
+                                    MakeNodeAction::Add(node, offset) => {
+                                        zelf.nodes.insert(offset, RefCell::new(node));
+                                    }
+                                    MakeNodeAction::Remove(offset) => {
+                                        zelf.nodes.remove(&offset);
+                                    }
                                 }
                             }
-                        }
-                    })
-                    .into(),
-                );
-            }
+                        })
+                        .into(),
+                    );
+                }
 
-            None => {}
-        }
+                None => {}
+            }
+        });
 
         (self.size, response)
     }
@@ -598,9 +604,8 @@ impl<'a> Iterator for StructRowHeightIterator<'a> {
 
         if let Some(node) = self.nodes.get(&cur_offset) {
             let node = node.borrow();
-            let row_count = node.row_count() as f32;
             self.cur_offset += node.byte_size();
-            return Some(row_count * NODE_UNIT_ROW_HEIGHT + 2.0 * row_count * self.item_spacing_y);
+            return Some(node.height(self.item_spacing_y));
         } else {
             self.cur_offset += none_ui_rules(cur_offset);
         }
