@@ -265,6 +265,7 @@ impl Pane {
         egui_extras::TableBuilder::new(ui)
             .max_scroll_height(max_height)
             .sense(egui::Sense::click())
+            .resizable(false)
             .column(Column::auto().at_least(20.0))
             .column(Column::auto().at_least(150.0))
             .column(Column::remainder())
@@ -360,7 +361,15 @@ impl Pane {
 
                 ui.heading("Struct");
 
-                let (bytes, r) = r#struct.borrow().ui(
+                let mut response = None;
+
+                let r = r#struct
+                    .borrow()
+                    .heading(r#struct.clone(), ui, **address.borrow(), state);
+
+                response = response.or(r);
+
+                let (_bytes, r) = r#struct.borrow().ui(
                     r#struct.clone(),
                     StructUiFlags { top_level: true },
                     ui,
@@ -368,7 +377,9 @@ impl Pane {
                     state,
                 );
 
-                r.map(|br| PaneResponse::AddressStructResponse(br))
+                response = response.or(r);
+
+                response.map(|br| PaneResponse::AddressStructResponse(br))
             }
             Pane::AddressList => {
                 ui.heading("Addresses");
