@@ -411,40 +411,40 @@ impl Node {
     fn make_node_options(
         ui: &mut egui::Ui,
         registry: &mut Registry,
-        offset: usize,
+        row_index: usize,
     ) -> Option<MakeNodeAction> {
         if ui.button("None").clicked() {
-            return Some(MakeNodeAction::Remove(offset));
+            return Some(MakeNodeAction::Remove(row_index));
         }
         (|| {
             if ui.button("Pointer").clicked() {
                 return Some((
                     Node::Pointer(Rc::downgrade(&registry.default_struct())),
-                    offset,
+                    row_index,
                 ));
             }
             if ui.button("Struct").clicked() {
                 return Some((
                     Node::Struct(Rc::downgrade(&registry.default_struct())),
-                    offset,
+                    row_index,
                 ));
             }
             if ui.button("U64").clicked() {
-                return Some((Node::U64, offset));
+                return Some((Node::U64, row_index));
             }
             if ui.button("U32").clicked() {
-                return Some((Node::U32, offset));
+                return Some((Node::U32, row_index));
             }
             if ui.button("U16").clicked() {
-                return Some((Node::U16, offset));
+                return Some((Node::U16, row_index));
             }
             if ui.button("U8").clicked() {
-                return Some((Node::U8, offset));
+                return Some((Node::U8, row_index));
             }
 
             None
         })()
-        .map(|(node, offset)| MakeNodeAction::Add(node, offset))
+        .map(|(node, row_index)| MakeNodeAction::Add(node, row_index))
     }
 }
 
@@ -500,7 +500,8 @@ pub(crate) struct StructLayout {
 #[derive(Debug)]
 pub(crate) struct Struct {
     pub(crate) layout: StructLayout,
-    pub(crate) size: usize,
+    pub(crate) row_count: usize,
+    /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
     pub(crate) name: String,
 }
@@ -509,7 +510,7 @@ impl Default for Struct {
     fn default() -> Self {
         Self {
             layout: Default::default(),
-            size: 64,
+            row_count: 8,
             nodes: Default::default(),
             name: "Default struct".into(),
         }
@@ -521,18 +522,16 @@ impl Struct {
         StructRowHeightIterator {
             nodes: &self.nodes,
             cur_offset: 0,
-            size: self.size,
+            cur_row: 0,
+            row_count: self.row_count,
             item_spacing_y,
         }
     }
 
-    fn bytes_for_row(&self, row_idx: usize) -> usize {
+    fn bytes_for_row(&self, row_index: usize) -> usize {
         let mut bytes = 0;
-        let mut rows = 0;
-        while rows < row_idx {
-            rows += 1;
-
-            if let Some(node) = self.nodes.get(&bytes) {
+        for row in 0..row_index {
+            if let Some(node) = self.nodes.get(&row) {
                 bytes += node.borrow().byte_size();
             } else {
                 bytes += none_ui_rules(bytes);
@@ -579,10 +578,10 @@ impl Struct {
                             }
                         });
 
-                    let mut size = self.size;
+                    let mut row_count = self.row_count;
 
                     if ui
-                        .add(egui::DragValue::new(&mut size).range(8..=8192))
+                        .add(egui::DragValue::new(&mut row_count).range(1..=8192))
                         .changed()
                     {
                         // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
@@ -590,7 +589,7 @@ impl Struct {
                             StructAction::new({
                                 let zelf = self_rc.clone();
                                 move |_| {
-                                    zelf.borrow_mut().size = size;
+                                    zelf.borrow_mut().row_count = row_count;
                                 }
                             })
                             .into(),
@@ -616,6 +615,8 @@ impl Struct {
         let mut response = None;
 
         let max_height = ui.available_height();
+
+        let mut size = 0;
 
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             let mut action = None;
@@ -645,7 +646,7 @@ impl Struct {
                             let (_, r) = row.col(|ui| {
                                 let new_address = address.wrapping_add(offset);
 
-                                let (bytes, r) = if let Some(node) = self.nodes.get(&offset) {
+                                let (bytes, r) = if let Some(node) = self.nodes.get(&index) {
                                     node.borrow_mut().ui(ui, new_address, offset, state)
                                 } else {
                                     Node::none_ui(ui, new_address, offset, None, state)
@@ -654,6 +655,9 @@ impl Struct {
                                 if let Some(r) = r {
                                     response = Some(r);
                                 }
+
+                                // Accumulate bytes for the total size of this struct
+                                size += bytes;
                             });
 
                             r.context_menu(|ui| {
@@ -683,7 +687,7 @@ impl Struct {
                                 }
 
                                 ui.separator();
-                                action = Node::make_node_options(ui, state.registry, offset);
+                                action = Node::make_node_options(ui, state.registry, index);
                             });
                         });
                     });
@@ -700,8 +704,8 @@ impl Struct {
                                     MakeNodeAction::Add(node, offset) => {
                                         zelf.nodes.insert(offset, RefCell::new(node));
                                     }
-                                    MakeNodeAction::Remove(offset) => {
-                                        zelf.nodes.remove(&offset);
+                                    MakeNodeAction::Remove(row) => {
+                                        zelf.nodes.remove(&row);
                                     }
                                 }
                             }
@@ -714,15 +718,14 @@ impl Struct {
             }
         });
 
-        (self.size, response)
+        (size, response)
     }
 
     pub(crate) fn byte_size(&self) -> usize {
-        // TODO(emily): Need to take into account inner struct sizes aswell.
         let mut bytes = 0;
 
-        while bytes < self.size {
-            if let Some(node) = self.nodes.get(&bytes) {
+        for row in 0..self.row_count {
+            if let Some(node) = self.nodes.get(&row) {
                 let node = node.borrow();
                 bytes += node.byte_size();
             } else {
@@ -736,21 +739,7 @@ impl Struct {
     }
 
     fn row_count(&self) -> usize {
-        let mut bytes = 0;
-        let mut rows = 0;
-
-        while bytes < self.size {
-            if let Some(node) = self.nodes.get(&bytes) {
-                let node = node.borrow();
-                rows += node.row_count();
-                bytes += node.byte_size();
-            } else {
-                rows += 1;
-                bytes += none_ui_rules(bytes);
-            }
-        }
-
-        rows
+        self.row_count
     }
 }
 
@@ -770,8 +759,9 @@ fn none_ui_rules(bytes: usize) -> usize {
 
 struct StructRowHeightIterator<'a> {
     nodes: &'a HashMap<usize, RefCell<Node>>,
+    cur_row: usize,
     cur_offset: usize,
-    size: usize,
+    row_count: usize,
     item_spacing_y: f32,
 }
 
@@ -779,13 +769,16 @@ impl<'a> Iterator for StructRowHeightIterator<'a> {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let cur_row = self.cur_row;
         let cur_offset = self.cur_offset;
 
-        if self.cur_offset >= self.size {
+        if cur_row >= self.row_count {
             return None;
         }
 
-        if let Some(node) = self.nodes.get(&cur_offset) {
+        self.cur_row += 1;
+
+        if let Some(node) = self.nodes.get(&cur_row) {
             let node = node.borrow();
             self.cur_offset += node.byte_size();
             return Some(node.height(self.item_spacing_y));

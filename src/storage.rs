@@ -45,7 +45,7 @@ mod v1 {
 
     #[derive(Serialize, Deserialize)]
     pub(super) struct Struct {
-        pub(super) size: usize,
+        pub(super) row_count: usize,
         pub(super) name: String,
         pub(super) nodes: HashMap<usize, Node>,
     }
@@ -131,7 +131,7 @@ mod v1 {
         fn make_real(&self) -> crate::Struct {
             crate::Struct {
                 name: self.name.clone(),
-                size: self.size,
+                row_count: self.row_count,
                 ..Default::default()
             }
         }
@@ -191,7 +191,7 @@ impl v1::Node {
 impl v1::Struct {
     fn new(from: &crate::node::Struct, registry: &crate::Registry) -> Self {
         Self {
-            size: from.size,
+            row_count: from.row_count,
             name: from.name.clone(),
             nodes: from
                 .nodes
