@@ -1,11 +1,14 @@
 use core::f32;
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use egui::{ahash::HashMap, vec2, RichText};
 
 use crate::{
     memory::{self, Memory},
-    registry::Registry,
+    registry::{Registry, RegistryId},
     Address, AddressResponse, State,
 };
 
@@ -17,15 +20,17 @@ pub(crate) enum Node {
     U16,
     U32,
     U64,
-    Struct(Rc<RefCell<Struct>>),
-    Pointer(Rc<RefCell<Struct>>),
+    Struct(Weak<RefCell<Struct>>),
+    Pointer(Weak<RefCell<Struct>>),
 }
 
 impl Node {
     fn row_count(&self) -> usize {
         match self {
             Node::U64 | Node::U32 | Node::U16 | Node::U8 => 1,
-            Node::Pointer(s) | Node::Struct(s) => s.borrow().row_count(),
+            Node::Pointer(s) | Node::Struct(s) => {
+                s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1)
+            }
         }
     }
 
@@ -36,11 +41,14 @@ impl Node {
             Node::U16 => 2,
             Node::U8 => 1,
             Node::Pointer(_) => 8,
-            Node::Struct(s) => {
-                let size = s.borrow().byte_size();
-                assert_ne!(size, 0);
-                size
-            }
+            Node::Struct(s) => s
+                .upgrade()
+                .map(|s| {
+                    let size = s.borrow().byte_size();
+                    assert_ne!(size, 0);
+                    size
+                })
+                .unwrap_or(8),
         }
     }
 
@@ -49,15 +57,19 @@ impl Node {
             Node::U8 | Node::U16 | Node::U32 | Node::U64 => NODE_UNIT_ROW_HEIGHT,
             Node::Struct(s) | Node::Pointer(s) => {
                 // NOTE(emily): Here we account for the extra padding in the egui table.
-
-                let row_heights: f32 = s
-                    .borrow()
-                    .row_heights(item_spacing_y)
-                    .map(|x| x + item_spacing_y)
-                    .sum();
-
                 let extra = 15.0 + item_spacing_y;
-                row_heights + extra
+
+                s.upgrade()
+                    .map(|s| {
+                        let row_heights: f32 = s
+                            .borrow()
+                            .row_heights(item_spacing_y)
+                            .map(|x| x + item_spacing_y)
+                            .sum();
+
+                        row_heights + extra
+                    })
+                    .unwrap_or(NODE_UNIT_ROW_HEIGHT + extra)
             }
         }
     }
@@ -106,7 +118,13 @@ impl Node {
                     _ => None,
                 } {
                     Some((address, s)) => {
-                        response = response.or(s.borrow().heading(s.clone(), ui, address, state));
+                        response = response.or(s
+                            .upgrade()
+                            .map(|s| s.borrow().heading(s.clone(), ui, address, state))
+                            .unwrap_or_else(|| {
+                                ui.label("Invalid struct");
+                                None
+                            }));
                     }
                     None => {}
                 };
@@ -163,13 +181,17 @@ impl Node {
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.add_space(40.0);
 
-                        s.clone().borrow().ui(
-                            s.clone(),
-                            StructUiFlags::default(),
-                            ui,
-                            address,
-                            state,
-                        )
+                        s.upgrade()
+                            .map(|s| {
+                                s.clone().borrow().ui(
+                                    s.clone(),
+                                    StructUiFlags::default(),
+                                    ui,
+                                    address,
+                                    state,
+                                )
+                            })
+                            .unwrap_or((8, None))
                     })
                     .inner;
 
@@ -184,13 +206,17 @@ impl Node {
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.add_space(40.0);
 
-                        s.clone().borrow().ui(
-                            s.clone(),
-                            StructUiFlags::default(),
-                            ui,
-                            address,
-                            state,
-                        )
+                        s.upgrade()
+                            .map(|s| {
+                                s.clone().borrow().ui(
+                                    s.clone(),
+                                    StructUiFlags::default(),
+                                    ui,
+                                    address,
+                                    state,
+                                )
+                            })
+                            .unwrap_or((8, None))
                     })
                     .inner;
 
@@ -206,7 +232,8 @@ impl Node {
                 let (Node::Struct(s) | Node::Pointer(s)) = self else {
                     panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
                 };
-                *s = new_s;
+
+                *s = Rc::downgrade(&new_s);
                 None
             }
             r => r,
@@ -250,7 +277,7 @@ impl Node {
                 if ui.button("Open struct in new tab").clicked() {
                     response = Some(AddressResponse::AddressStruct(
                         Some(registry.find_or_register_address(address.into())),
-                        Some(s.clone()),
+                        s.upgrade(),
                     ))
                 }
             }
@@ -260,7 +287,7 @@ impl Node {
                 if ui.button("Open struct in new tab").clicked() {
                     response = Some(AddressResponse::AddressStruct(
                         Some(registry.find_or_register_address(address.into())),
-                        Some(s.clone()),
+                        s.upgrade(),
                     ))
                 }
             }
@@ -367,10 +394,16 @@ impl Node {
         }
         (|| {
             if ui.button("Pointer").clicked() {
-                return Some((Node::Pointer(registry.default_struct()), offset));
+                return Some((
+                    Node::Pointer(Rc::downgrade(&registry.default_struct())),
+                    offset,
+                ));
             }
             if ui.button("Struct").clicked() {
-                return Some((Node::Struct(registry.default_struct()), offset));
+                return Some((
+                    Node::Struct(Rc::downgrade(&registry.default_struct())),
+                    offset,
+                ));
             }
             if ui.button("U64").clicked() {
                 return Some((Node::U64, offset));
@@ -502,8 +535,14 @@ impl Struct {
                     egui::ComboBox::new((ui.id(), address, &self.name), "")
                         .selected_text(&self.name)
                         .show_ui(ui, |ui| {
-                            for (id, (name, s)) in &state.registry.structs_by_name {
-                                if ui.button(format!("{name} ({id})")).clicked() {
+                            for (id, s) in &state.registry.structs {
+                                if ui
+                                    .add(
+                                        egui::Button::new(format!("{} ({id})", s.borrow().name))
+                                            .selected(Rc::ptr_eq(&self_rc, s)),
+                                    )
+                                    .clicked()
+                                {
                                     response = Some(AddressResponse::Replace(s.clone()))
                                 }
                             }
@@ -655,7 +694,21 @@ impl Struct {
     }
 
     pub(crate) fn byte_size(&self) -> usize {
-        self.size
+        // TODO(emily): Need to take into account inner struct sizes aswell.
+        let mut bytes = 0;
+
+        while bytes < self.size {
+            if let Some(node) = self.nodes.get(&bytes) {
+                let node = node.borrow();
+                bytes += node.byte_size();
+            } else {
+                bytes += none_ui_rules(bytes);
+            }
+        }
+
+        bytes
+
+        // self.size
     }
 
     fn row_count(&self) -> usize {

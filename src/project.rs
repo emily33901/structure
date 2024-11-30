@@ -1,7 +1,10 @@
+use std::rc::Rc;
 
 use egui_tiles::{Container, TileId, Tiles};
 
 use crate::{registry::Registry, AddChild, Pane};
+
+// pub(crate) struct CollapseState(HashMap<(usize, usize), Collapsed>);
 
 pub(crate) enum Collapsed {
     Collapsed,
@@ -53,8 +56,8 @@ impl Layout {
                 let address = address.unwrap_or_else(|| registry.default_address());
 
                 Pane::AddressStruct {
-                    r#struct: s,
-                    address,
+                    r#struct: Rc::downgrade(&s),
+                    address: Rc::downgrade(&address),
                 }
             }
             AddChild::AddressList => Pane::AddressList,

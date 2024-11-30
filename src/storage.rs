@@ -33,12 +33,12 @@ mod v1 {
                 Node::U16 => crate::node::Node::U16,
                 Node::U32 => crate::node::Node::U32,
                 Node::U64 => crate::node::Node::U64,
-                Node::Struct(registry_id) => {
-                    crate::node::Node::Struct(registry.structs.get(registry_id).unwrap().clone())
-                }
-                Node::Pointer(registry_id) => {
-                    crate::node::Node::Pointer(registry.structs.get(registry_id).unwrap().clone())
-                }
+                Node::Struct(registry_id) => crate::node::Node::Struct(Rc::downgrade(
+                    registry.structs.get(registry_id).unwrap(),
+                )),
+                Node::Pointer(registry_id) => crate::node::Node::Pointer(Rc::downgrade(
+                    registry.structs.get(registry_id).unwrap(),
+                )),
             }
         }
     }
@@ -107,8 +107,6 @@ mod v1 {
                     .into_iter()
                     .map(|(k, v)| (k, Rc::new(RefCell::new(v.into()))))
                     .collect(),
-                structs_by_name: Default::default(),
-                addresses_by_name: Default::default(),
                 dirty: true,
             };
 
@@ -152,15 +150,15 @@ mod v1 {
             let convert = super::TreeConvert {
                 registry,
                 convert_pane: Box::new(move |pane, registry| match pane {
-                    Pane::AddressStruct { address, r#struct } => crate::Pane::AddressStruct {
-                        r#struct: registry.structs.get(r#struct).unwrap().clone(),
-                        address: registry.addresses.get(address).unwrap().clone(),
-                    },
-                    Pane::StructList => crate::Pane::StructList,
-                    Pane::AddressList => crate::Pane::AddressList,
-                    Pane::ProcessList { matching } => crate::Pane::ProcessList {
+                    Pane::AddressStruct { address, r#struct } => Some(crate::Pane::AddressStruct {
+                        r#struct: Rc::downgrade(&registry.structs.get(r#struct).unwrap()),
+                        address: Rc::downgrade(&registry.addresses.get(address).unwrap()),
+                    }),
+                    Pane::StructList => Some(crate::Pane::StructList),
+                    Pane::AddressList => Some(crate::Pane::AddressList),
+                    Pane::ProcessList { matching } => Some(crate::Pane::ProcessList {
                         matching: matching.into(),
-                    },
+                    }),
                 }),
             };
 
@@ -174,14 +172,18 @@ mod v1 {
 }
 
 impl v1::Node {
-    fn new(value: &crate::node::Node, registry: &crate::Registry) -> Self {
+    fn new(value: &crate::node::Node, registry: &crate::Registry) -> Option<Self> {
         match value {
-            crate::node::Node::U8 => Self::U8,
-            crate::node::Node::U16 => Self::U16,
-            crate::node::Node::U32 => Self::U32,
-            crate::node::Node::U64 => Self::U64,
-            crate::node::Node::Struct(s) => Self::Struct(registry.struct_id(s).unwrap()),
-            crate::node::Node::Pointer(s) => Self::Pointer(registry.struct_id(s).unwrap()),
+            crate::node::Node::U8 => Some(Self::U8),
+            crate::node::Node::U16 => Some(Self::U16),
+            crate::node::Node::U32 => Some(Self::U32),
+            crate::node::Node::U64 => Some(Self::U64),
+            crate::node::Node::Struct(s) => s
+                .upgrade()
+                .map(|s| Self::Struct(registry.struct_id(&s).unwrap())),
+            crate::node::Node::Pointer(s) => s
+                .upgrade()
+                .map(|s| Self::Pointer(registry.struct_id(&s).unwrap())),
         }
     }
 }
@@ -194,7 +196,7 @@ impl v1::Struct {
             nodes: from
                 .nodes
                 .iter()
-                .map(|(k, v)| (*k, v1::Node::new(&*v.borrow(), registry)))
+                .filter_map(|(k, v)| v1::Node::new(&*v.borrow(), registry).map(|node| (*k, node)))
                 .collect(),
         }
     }
@@ -224,7 +226,7 @@ impl v1::Registry {
     }
 }
 
-type ConvertPane<TPaneA, TPaneB> = Box<dyn Fn(&TPaneA, &crate::Registry) -> TPaneB>;
+type ConvertPane<TPaneA, TPaneB> = Box<dyn Fn(&TPaneA, &crate::Registry) -> Option<TPaneB>>;
 
 struct TreeConvert<'a, TPaneA, TPaneB> {
     pub(crate) registry: &'a crate::Registry,
@@ -237,8 +239,8 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
         old_pane: &TPaneA,
         old_tiles: &egui_tiles::Tiles<TPaneA>,
         new_tiles: &mut egui_tiles::Tiles<TPaneB>,
-    ) -> egui_tiles::TileId {
-        new_tiles.insert_pane((self.convert_pane)(old_pane, &self.registry))
+    ) -> Option<egui_tiles::TileId> {
+        (self.convert_pane)(old_pane, &self.registry).map(|pane| new_tiles.insert_pane(pane))
     }
 
     fn clone_container(
@@ -256,13 +258,15 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
                 for tile in &tabs.children {
                     let new_tile = self.clone(*tile, old_tiles, new_tiles);
 
-                    if let Some(t) = tabs.active {
-                        if t == *tile {
-                            new_active_tile = Some(new_tile);
+                    if let Some(new_tile) = new_tile {
+                        if let Some(t) = tabs.active {
+                            if t == *tile {
+                                new_active_tile = Some(new_tile);
+                            }
                         }
-                    }
 
-                    new_tabs.push(new_tile);
+                        new_tabs.push(new_tile);
+                    }
                 }
 
                 let mut container = egui_tiles::Tabs::new(new_tabs);
@@ -274,9 +278,9 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
                 let mut new_children = vec![];
 
                 for tile in &linear.children {
-                    let new_tile = self.clone(*tile, old_tiles, new_tiles);
-
-                    new_children.push(new_tile);
+                    if let Some(new_tile) = self.clone(*tile, old_tiles, new_tiles) {
+                        new_children.push(new_tile);
+                    }
                 }
 
                 let mut container = egui_tiles::Linear::new(linear.dir, new_children);
@@ -290,7 +294,9 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
                 for tile in grid.children() {
                     let new_tile = self.clone(*tile, old_tiles, new_tiles);
 
-                    new_children.push(new_tile);
+                    if let Some(new_tile) = new_tile {
+                        new_children.push(new_tile);
+                    }
                 }
 
                 let mut container = egui_tiles::Grid::new(new_children);
@@ -309,11 +315,11 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
         old_tile: egui_tiles::TileId,
         old_tiles: &egui_tiles::Tiles<TPaneA>,
         new_tiles: &mut egui_tiles::Tiles<TPaneB>,
-    ) -> egui_tiles::TileId {
+    ) -> Option<egui_tiles::TileId> {
         if let Some(container) = old_tiles.get_container(old_tile) {
-            self.clone_container(container, old_tiles, new_tiles)
+            Some(self.clone_container(container, old_tiles, new_tiles))
         } else if let Some(tile) = old_tiles.get_pane(&old_tile) {
-            self.clone_tile(tile, old_tiles, new_tiles)
+            Some(self.clone_tile(tile, old_tiles, new_tiles)?)
         } else {
             unreachable!()
         }
@@ -328,7 +334,8 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
 
         let mut new_tiles = egui_tiles::Tiles::default();
 
-        let new_root = self.clone(old_root, &old_tiles, &mut new_tiles);
+        // TODO(emily): Should we alway even expect a root?
+        let new_root = self.clone(old_root, &old_tiles, &mut new_tiles).unwrap();
         (new_tiles, new_root)
     }
 }
@@ -338,15 +345,22 @@ impl v1::Layout {
         let convert = TreeConvert {
             registry,
             convert_pane: Box::new(move |pane, registry| match pane {
-                crate::Pane::AddressStruct { r#struct, address } => v1::Pane::AddressStruct {
-                    r#struct: registry.struct_id(r#struct).unwrap(),
-                    address: registry.address_id(address).unwrap(),
-                },
-                crate::Pane::StructList => v1::Pane::StructList,
-                crate::Pane::AddressList => v1::Pane::AddressList,
-                crate::Pane::ProcessList { matching } => v1::Pane::ProcessList {
+                crate::Pane::AddressStruct { r#struct, address } => {
+                    let Some((r#struct, address)) = r#struct.upgrade().zip(address.upgrade())
+                    else {
+                        return None;
+                    };
+
+                    Some(v1::Pane::AddressStruct {
+                        r#struct: registry.struct_id(&r#struct).unwrap(),
+                        address: registry.address_id(&address).unwrap(),
+                    })
+                }
+                crate::Pane::StructList => Some(v1::Pane::StructList),
+                crate::Pane::AddressList => Some(v1::Pane::AddressList),
+                crate::Pane::ProcessList { matching } => Some(v1::Pane::ProcessList {
                     matching: matching.clone(),
-                },
+                }),
             }),
         };
 

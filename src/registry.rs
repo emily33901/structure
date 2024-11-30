@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct RegistryId(pub usize);
 
 impl std::fmt::Display for RegistryId {
@@ -22,9 +22,6 @@ pub(crate) struct Registry {
     pub(crate) next_id: usize,
     pub(crate) structs: HashMap<RegistryId, Rc<RefCell<Struct>>>,
     pub(crate) addresses: HashMap<RegistryId, Rc<RefCell<Address>>>,
-
-    pub(crate) structs_by_name: HashMap<RegistryId, (String, Rc<RefCell<Struct>>)>,
-    pub(crate) addresses_by_name: HashMap<RegistryId, (String, Rc<RefCell<Address>>)>,
 
     pub(crate) dirty: bool,
 }
@@ -41,8 +38,6 @@ impl Registry {
     }
 
     pub(crate) fn register_struct(&mut self, s: Struct) -> Rc<RefCell<Struct>> {
-        self.dirty = true;
-
         let id = self.next_id();
         self.structs.insert(id, RefCell::new(s).into());
         self.structs.get(&id).unwrap().clone()
@@ -53,8 +48,6 @@ impl Registry {
     }
 
     pub(crate) fn register_address(&mut self, address: Address) -> Rc<RefCell<Address>> {
-        self.dirty = true;
-
         let id = self.next_id();
         self.addresses.insert(id, RefCell::new(address).into());
         self.addresses.get(&id).unwrap().clone()
@@ -72,27 +65,14 @@ impl Registry {
         self.register_address(address)
     }
 
-    pub(crate) fn default_pane(&mut self) -> Pane {
-        Pane::AddressStruct {
-            r#struct: self.default_struct(),
-            address: self.default_address(),
-        }
+    pub(crate) fn find_struct(&self, id: &RegistryId) -> Option<Rc<RefCell<Struct>>> {
+        self.structs.get(id).cloned()
     }
 
-    pub(crate) fn frame(&mut self) {
-        if self.dirty {
-            self.dirty = false;
-            self.structs_by_name.clear();
-            for (id, s) in &self.structs {
-                self.structs_by_name
-                    .insert(id.clone(), (s.borrow().name.clone(), s.clone()));
-            }
-
-            self.addresses_by_name.clear();
-            for (id, address) in &self.addresses {
-                self.addresses_by_name
-                    .insert(id.clone(), (address.borrow().0.clone(), address.clone()));
-            }
+    pub(crate) fn default_pane(&mut self) -> Pane {
+        Pane::AddressStruct {
+            r#struct: Rc::downgrade(&self.default_struct()),
+            address: Rc::downgrade(&self.default_address()),
         }
     }
 
@@ -114,9 +94,5 @@ impl Registry {
         }
 
         None
-    }
-
-    pub(crate) fn mark_diry(&mut self) {
-        self.dirty = true;
     }
 }

@@ -1,13 +1,17 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
 
-use egui::Theme;
+use egui::{vec2, Theme};
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
 use process::{Module, OpenProcess, Process, Section};
 use project::{Layout, Project};
-use registry::Registry;
+use registry::{Registry, RegistryId};
 use rtti::RttiCache;
 
 mod memory;
@@ -119,16 +123,24 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
         tile_id: egui_tiles::TileId,
         pane: &mut Pane,
     ) -> egui_tiles::UiResponse {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-            ui.add_space(PANE_INNER_PAD);
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width() - PANE_INNER_PAD, ui.available_height()),
+            egui::Layout::left_to_right(egui::Align::Min),
+            |ui| {
                 ui.add_space(PANE_INNER_PAD);
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width(), ui.available_height() - PANE_INNER_PAD),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.add_space(PANE_INNER_PAD);
 
-                if let Some(pane_response) = pane.ui(ui, &mut self.state) {
-                    self.options.pane_response = Some((tile_id, pane_response))
-                }
-            });
-        });
+                        if let Some(pane_response) = pane.ui(ui, &mut self.state) {
+                            self.options.pane_response = Some((tile_id, pane_response))
+                        }
+                    },
+                );
+            },
+        );
 
         egui_tiles::UiResponse::None
     }
@@ -227,18 +239,24 @@ enum PaneResponse {
     OpenStruct(Rc<RefCell<Struct>>),
     ProcessSelected(Process),
     AddChild(AddChild),
+    Close,
 }
 
 enum Pane {
     AddressStruct {
-        address: Rc<RefCell<Address>>,
-        r#struct: Rc<RefCell<Struct>>,
+        address: Weak<RefCell<Address>>,
+        r#struct: Weak<RefCell<Struct>>,
     },
     StructList,
     AddressList,
     ProcessList {
         matching: String,
     },
+}
+
+enum RegistryListResponse {
+    Remove(RegistryId),
+    PaneResponse(PaneResponse),
 }
 
 impl Pane {
@@ -249,14 +267,13 @@ impl Pane {
         render_value: FValue,
         make_pane_response: FResponse,
         headers: &[&str; 3],
-    ) -> (bool, Option<PaneResponse>)
+    ) -> Option<RegistryListResponse>
     where
-        FName: Fn(&mut egui::Ui, &T) -> bool,
+        FName: Fn(&mut egui::Ui, &T),
         FValue: Fn(&mut egui::Ui, &T),
         FResponse: Fn(&T) -> PaneResponse,
     {
         let mut response = None;
-        let mut registry_dirty = false;
 
         let keys: Vec<_> = registry_map.keys().collect();
 
@@ -268,8 +285,9 @@ impl Pane {
             .resizable(false)
             .column(Column::auto().at_least(20.0))
             .column(Column::auto().at_least(150.0))
-            .column(Column::remainder())
-            .header(20.0, |mut header| {
+            .column(Column::remainder().auto_size_this_frame(true))
+            .column(Column::auto().at_most(15.0))
+            .header(25.0, |mut header| {
                 for i in 0..3 {
                     header.col(|ui| {
                         ui.label(headers[i]);
@@ -279,7 +297,7 @@ impl Pane {
             .body(|body| {
                 body.rows(15.0, keys.len(), |mut row| {
                     let index = row.index();
-                    let key = keys[index];
+                    let key = *keys[index];
 
                     let (_, r1) = row.col(|ui| {
                         ui.label(format!("{}", key.0));
@@ -298,23 +316,39 @@ impl Pane {
                         // we cant access it in the callbacks that we pass in. This means that we have to
                         // pass this back out to the caller.
                         // TODO(emily): Could use a similar system to AddressResponse::Action(StructAction)
-                        registry_dirty = registry_dirty || render_name(ui, value);
+                        render_name(ui, value);
+                    });
+
+                    row.col(|ui| {
+                        if ui.button("x").clicked() {
+                            response = Some(RegistryListResponse::Remove(key));
+                        }
                     });
 
                     // TODO(emily): I remember being able to do intersections of responses but i cant
                     // figure out how to do that now
                     if r1.clicked() || r2.clicked() || r3.clicked() {
-                        response = Some(make_pane_response(value))
+                        response = Some(RegistryListResponse::PaneResponse(make_pane_response(
+                            value,
+                        )))
                     }
                 });
             });
 
-        (registry_dirty, response)
+        response
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, state: &mut State<'_>) -> Option<PaneResponse> {
         match self {
-            Pane::AddressStruct { r#struct, address } => {
+            Pane::AddressStruct {
+                r#struct: weak_struct,
+                address: weak_address,
+            } => {
+                let Some((r#struct, address)) = weak_struct.upgrade().zip(weak_address.upgrade())
+                else {
+                    return Some(PaneResponse::Close);
+                };
+
                 let address_name_id = { egui::Id::new(ui.id()).with("address-name") };
 
                 ui.horizontal(|ui| {
@@ -341,17 +375,20 @@ impl Pane {
                         egui::ComboBox::new("address-combo-box", "")
                             .selected_text(name)
                             .show_ui(ui, |ui| {
-                                for (id, (name, other_address)) in &state.registry.addresses_by_name
-                                {
-                                    if ui.button(format!("{name} ({id})")).clicked() {
-                                        *address = other_address.clone();
+                                for (id, other_address) in &state.registry.addresses {
+                                    if ui
+                                        .button(format!("{} ({id})", other_address.borrow().name()))
+                                        .clicked()
+                                    {
+                                        *weak_address = Rc::downgrade(&other_address.clone());
                                     }
                                 }
 
                                 ui.separator();
 
                                 if ui.button("New address").clicked() {
-                                    *address = state.registry.default_address();
+                                    *weak_address =
+                                        Rc::downgrade(&state.registry.default_address());
                                 }
                             });
                     }
@@ -386,12 +423,11 @@ impl Pane {
 
                 ui.separator();
 
-                let (registry_dirty, response) = Pane::registry_list(
+                match Pane::registry_list(
                     ui,
                     &mut state.registry.addresses,
                     |ui, address| {
-                        ui.text_edit_singleline(&mut address.borrow_mut().0)
-                            .changed()
+                        ui.text_edit_singleline(&mut address.borrow_mut().0);
                     },
                     |ui, address| {
                         ui.scope(|ui| {
@@ -401,31 +437,39 @@ impl Pane {
                     },
                     |address| PaneResponse::OpenAddress(address.clone()),
                     &["id", "address", "name"],
-                );
-                if registry_dirty {
-                    state.registry.mark_diry();
+                ) {
+                    Some(RegistryListResponse::Remove(id)) => {
+                        state.registry.addresses.remove(&id);
+                        None
+                    }
+                    Some(RegistryListResponse::PaneResponse(pane_response)) => Some(pane_response),
+                    None => None,
                 }
-                response
             }
             Pane::StructList => {
                 ui.heading("Structs");
 
                 ui.separator();
 
-                let (registry_dirty, response) = Pane::registry_list(
+                match Pane::registry_list(
                     ui,
                     &mut state.registry.structs,
-                    |ui, s| ui.text_edit_singleline(&mut s.borrow_mut().name).changed(),
+                    |ui, s| {
+                        ui.text_edit_singleline(&mut s.borrow_mut().name);
+                    },
                     |ui, s| {
                         ui.label(format!("{}", s.borrow().byte_size()));
                     },
                     |s| PaneResponse::OpenStruct(s.clone()),
                     &["id", "size", "name"],
-                );
-                if registry_dirty {
-                    state.registry.mark_diry();
+                ) {
+                    Some(RegistryListResponse::Remove(id)) => {
+                        state.registry.structs.remove(&id);
+                        None
+                    }
+                    Some(RegistryListResponse::PaneResponse(response)) => Some(response),
+                    _ => None,
                 }
-                response
             }
             Pane::ProcessList { matching } => {
                 ui.horizontal(|ui| {
@@ -499,6 +543,10 @@ impl Pane {
     fn title(&self) -> String {
         match self {
             Pane::AddressStruct { r#struct, address } => {
+                let Some((r#struct, address)) = r#struct.upgrade().zip(address.upgrade()) else {
+                    return format!("Invalid struct or address");
+                };
+
                 format!("{} @ {:016X}", r#struct.borrow().name, **address.borrow())
             }
             Pane::AddressList => "Address list".into(),
@@ -631,8 +679,6 @@ impl eframe::App for App {
             self.processes = process::processes().unwrap_or_default();
         }
 
-        self.project.registry.frame();
-
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -708,7 +754,8 @@ impl eframe::App for App {
                         else {
                             panic!();
                         };
-                        *s = new_s;
+
+                        *s = Rc::downgrade(&new_s);
                     }
                     PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
                         action.call(&mut behavior.state);
@@ -730,6 +777,9 @@ impl eframe::App for App {
                     }
                     PaneResponse::AddChild(child) => {
                         layout.add_child(&mut self.project.registry, from, child)
+                    }
+                    PaneResponse::Close => {
+                        eprintln!("Ignoring close");
                     }
                 }
             }
