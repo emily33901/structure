@@ -9,13 +9,15 @@ use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
 use node::{Struct, StructAction, StructUiFlags};
-use process::{Module, OpenProcess, Process, Section};
+use pe::{Module, Section};
+use process::{OpenProcess, Process};
 use project::{Layout, Project};
 use registry::{Registry, RegistryId};
 use rtti::RttiCache;
 
 mod memory;
 mod node;
+mod pe;
 mod process;
 mod project;
 mod registry;
@@ -285,9 +287,10 @@ impl Pane {
             .resizable(false)
             .column(Column::auto().at_least(20.0))
             .column(Column::auto().at_least(150.0))
-            .column(Column::remainder().auto_size_this_frame(true))
+            .column(Column::remainder().at_most(200.0))
             .column(Column::auto().at_most(15.0))
-            .header(25.0, |mut header| {
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .header(20.0, |mut header| {
                 for i in 0..3 {
                     header.col(|ui| {
                         ui.label(headers[i]);
@@ -295,7 +298,7 @@ impl Pane {
                 }
             })
             .body(|body| {
-                body.rows(15.0, keys.len(), |mut row| {
+                body.rows(20.0, keys.len(), |mut row| {
                     let index = row.index();
                     let key = *keys[index];
 
@@ -306,7 +309,7 @@ impl Pane {
                     let value: &T = registry_map.get(&key).unwrap();
 
                     let (_, r2) = row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             render_value(ui, value);
                         });
                     });
@@ -621,7 +624,7 @@ impl App {
         );
 
         fonts.font_data.insert(
-            "Iosevka".to_owned(),
+            "NotoSansMono".to_owned(),
             egui::FontData::from_static(include_bytes!("../resource/NotoSansMono-Regular.ttf")),
         );
 
@@ -636,7 +639,7 @@ impl App {
             .families
             .entry(egui::FontFamily::Monospace)
             .or_default()
-            .insert(0, "Iosevka".to_owned());
+            .insert(0, "NotoSansMono".to_owned());
 
         cc.egui_ctx.set_fonts(fonts);
 
@@ -662,23 +665,6 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.test.value += 1;
 
-        // TODO(emily): Don't need to do these things each frame
-        // TODO(emily): Handle these higher up than in process, so that we can make use of Memory
-        // and its paging
-        {
-            if let Some(process) = self.open_process.as_ref() {
-                self.modules = process.modules().ok();
-                self.sections = process.sections().ok();
-
-                if let Some((modules, sections)) = self.modules.as_ref().zip(self.sections.as_mut())
-                {
-                    process.module_sections(modules, sections).unwrap();
-                }
-            }
-
-            self.processes = process::processes().unwrap_or_default();
-        }
-
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -695,18 +681,36 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(process) = &self.process {
-                ui.heading(format!("{} ({})", process.name, process.pid));
-            } else {
-                ui.heading("No process selected");
-            }
-
             // TODO(emily): At the moment we refresh all pages every frame.
             let mut memory = if let Some(process) = self.open_process.as_ref() {
                 Memory::new_process(process)
             } else {
                 Memory::new_null()
             };
+
+            // TODO(emily): Don't need to do these things each frame
+            // TODO(emily): Handle these higher up than in process, so that we can make use of Memory
+            // and its paging
+            {
+                if let Some(process) = self.open_process.as_ref() {
+                    self.modules = pe::modules(&mut memory).ok();
+                    self.sections = pe::sections(&mut memory).ok();
+
+                    if let Some((modules, sections)) = self.modules.as_ref().zip(self.sections.as_mut())
+                    {
+                        pe::module_sections(&mut memory, modules, sections).unwrap();
+                    }
+                }
+
+                self.processes = process::processes().unwrap_or_default();
+            }
+
+            if let Some(process) = &self.process {
+                ui.heading(format!("{} ({})", process.name, process.pid));
+            } else {
+                ui.heading("No process selected");
+            }
+
 
             let mut behavior = TreeBehavior {
                 options: &mut self.tree_options,

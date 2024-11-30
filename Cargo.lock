@@ -1703,6 +1703,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "patternscan"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbf9ac94ae7c3d7f743ec57e0b6b05077631c1a90c6cea9b162a69efa6d6bbde"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2169,6 +2175,7 @@ dependencies = [
  "egui_tiles",
  "iced-x86",
  "parking_lot",
+ "patternscan",
  "rand",
  "rodio",
  "serde",

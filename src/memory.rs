@@ -1,9 +1,11 @@
-use std::mem::MaybeUninit;
+use std::mem::{offset_of, MaybeUninit};
 
+use anyhow::Result;
 use egui::{ahash::HashMap, RichText};
 
 use crate::{
-    process::{OpenProcess, Section, SectionCategory},
+    pe::{Section, SectionCategory},
+    process::OpenProcess,
     rtti::Rtti,
     AddressResponse, State,
 };
@@ -205,5 +207,52 @@ impl<'a> Memory<'a> {
         self.get(address, slice);
 
         unsafe { value.assume_init() }
+    }
+
+    pub(crate) fn reader(&'a mut self, range: std::ops::Range<usize>) -> MemoryReader {
+        MemoryReader {
+            memory: self,
+            range,
+            offset: 0,
+        }
+    }
+
+    pub(crate) fn pattern_scan(
+        &'a mut self,
+        range: std::ops::Range<usize>,
+        pattern: &str,
+        offset: usize,
+    ) -> Result<Option<usize>> {
+        let start = range.start;
+
+        let result = patternscan::scan_first_match(self.reader(range), pattern)?
+            .map(|addr| start + addr + offset);
+
+        Ok(result)
+    }
+
+    pub(crate) fn process(&self) -> Option<&OpenProcess> {
+        match self {
+            Memory::Null => None,
+            Memory::Process { process, .. } => Some(process),
+        }
+    }
+}
+
+pub struct MemoryReader<'a> {
+    memory: &'a mut Memory<'a>,
+    range: std::ops::Range<usize>,
+    offset: usize,
+}
+
+impl std::io::Read for MemoryReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let pos = self.range.start + self.offset;
+        if pos > self.range.end {
+            return Ok(0);
+        }
+        let read_len = buf.len().min(self.range.end - pos);
+        self.memory.get(pos, buf);
+        Ok(read_len)
     }
 }

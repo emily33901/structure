@@ -4,7 +4,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use egui::{ahash::HashMap, vec2, RichText};
+use egui::{ahash::HashMap, vec2, Align, InnerResponse, Layout, RichText};
 
 use crate::{
     memory::{self, Memory},
@@ -25,7 +25,7 @@ fn glyph_width(ui: &egui::Ui, c: char) -> f32 {
 
 fn spacing(ui: &egui::Ui) -> f32 {
     let glyph_width = glyph_width(ui, '.');
-    let spacing = 4.0 * glyph_width;
+    let spacing = 6.0 * glyph_width;
 
     spacing
 }
@@ -92,6 +92,28 @@ impl Node {
         }
     }
 
+    fn none_ui_heading(ui: &mut egui::Ui, address: usize, offset_in_parent: usize) {
+        let spacing = spacing(&ui);
+
+        {
+            let label = egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
+                .selectable(false);
+
+            ui.add(label);
+        }
+
+        ui.add_space(spacing);
+
+        {
+            let label =
+                egui::Label::new(RichText::new(&format!("{:016X}", address))).selectable(true);
+
+            ui.add(label);
+        }
+
+        ui.add_space(spacing);
+    }
+
     fn node_heading(
         &mut self,
         ui: &mut egui::Ui,
@@ -101,30 +123,11 @@ impl Node {
     ) -> Option<AddressResponse> {
         let response = ui.allocate_ui_with_layout(
             vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Center),
+            Layout::left_to_right(Align::Center),
             |ui| {
                 let mut response = None;
 
-                let spacing = spacing(&ui);
-
-                {
-                    let label =
-                        egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
-                            .selectable(false);
-
-                    ui.add(label);
-                }
-
-                ui.add_space(spacing);
-
-                {
-                    let label = egui::Label::new(RichText::new(&format!("{:016X}", address)))
-                        .selectable(true);
-
-                    ui.add(label);
-                }
-
-                ui.add_space(spacing);
+                Self::none_ui_heading(ui, address, offset_in_parent);
 
                 match match self {
                     Node::Struct(s) => {
@@ -170,36 +173,28 @@ impl Node {
 
         let spacing = spacing(&ui);
 
-        let bytes = match self {
-            Node::U64 => {
-                ui.label("U64");
-                let (bytes, r) = Node::none_ui(ui, address, offset_in_parent, Some(8), state);
-                response = response.or(r);
-                bytes
-            }
-            Node::U32 => {
-                ui.label("U32");
-                let (bytes, r) = Node::none_ui(ui, address, offset_in_parent, Some(4), state);
-                response = response.or(r);
-                bytes
-            }
-            Node::U16 => {
-                ui.label("U16");
-                let (bytes, r) = Node::none_ui(ui, address, offset_in_parent, Some(2), state);
-                response = response.or(r);
-                bytes
-            }
-            Node::U8 => {
-                ui.label("U8");
-                let (bytes, r) = Node::none_ui(ui, address, offset_in_parent, Some(1), state);
-                response = response.or(r);
-                bytes
-            }
-            // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
-            // Don't just copy paste it.
-            Node::Struct(s) => {
-                let (bytes, r) = ui
-                    .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        let (bytes, r) = ui
+            .with_layout(Layout::left_to_right(Align::Min), |ui| {
+                match self {
+                    Node::U64 => {
+                        ui.label("U64");
+                        Node::none_ui(ui, address, offset_in_parent, Some(8), state)
+                    }
+                    Node::U32 => {
+                        ui.label("U32");
+                        Node::none_ui(ui, address, offset_in_parent, Some(4), state)
+                    }
+                    Node::U16 => {
+                        ui.label("U16");
+                        Node::none_ui(ui, address, offset_in_parent, Some(2), state)
+                    }
+                    Node::U8 => {
+                        ui.label("U8");
+                        Node::none_ui(ui, address, offset_in_parent, Some(1), state)
+                    }
+                    // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
+                    // Don't just copy paste it.
+                    Node::Struct(s) => {
                         ui.add_space(spacing);
 
                         s.upgrade()
@@ -213,18 +208,10 @@ impl Node {
                                 )
                             })
                             .unwrap_or((8, None))
-                    })
-                    .inner;
+                    }
+                    Node::Pointer(s) => {
+                        let address = state.memory.read(address);
 
-                response = response.or(r);
-
-                bytes
-            }
-            Node::Pointer(s) => {
-                let address = state.memory.read(address);
-
-                let (bytes, r) = ui
-                    .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.add_space(spacing);
 
                         s.upgrade()
@@ -238,14 +225,12 @@ impl Node {
                                 )
                             })
                             .unwrap_or((8, None))
-                    })
-                    .inner;
+                    }
+                }
+            })
+            .inner;
 
-                response = response.or(r);
-
-                bytes
-            }
-        };
+        let response = response.or(r);
 
         // Handle replacing Struct with a different Struct
         let response = match response {
@@ -274,12 +259,15 @@ impl Node {
     ) -> (usize, Option<AddressResponse>) {
         let height = self.height(ui.spacing().item_spacing.y);
 
+        let layout = match self {
+            Node::U8 | Node::U16 | Node::U32 | Node::U64 => Layout::left_to_right(Align::Center),
+            Node::Struct(_) | Node::Pointer(_) => Layout::top_down(Align::Min),
+        };
+
         let (bytes, response) = ui
-            .allocate_ui_with_layout(
-                vec2(ui.available_width(), height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| self.node_ui_inner(ui, address, offset_in_parent, state),
-            )
+            .allocate_ui_with_layout(vec2(ui.available_width(), height), layout, |ui| {
+                self.node_ui_inner(ui, address, offset_in_parent, state)
+            })
             .inner;
 
         (bytes, response)
@@ -343,25 +331,7 @@ impl Node {
 
         state.memory.get(address, &mut buffer);
 
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            {
-                let label = egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
-                    .selectable(false);
-
-                ui.add(label);
-            }
-
-            ui.add_space(spacing);
-
-            {
-                let label =
-                    egui::Label::new(RichText::new(&format!("{:016X}", address))).selectable(true);
-
-                ui.add(label);
-            }
-
-            ui.add_space(spacing);
-
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             {
                 let padding = 8 - buffer.len();
                 let label = egui::Label::new(RichText::new(format!(
@@ -552,7 +522,7 @@ impl Struct {
 
         ui.allocate_ui_with_layout(
             vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Center),
+            Layout::left_to_right(Align::Center),
             |ui| {
                 {
                     egui::ComboBox::new((ui.id(), address, &self.name), "")
@@ -618,7 +588,7 @@ impl Struct {
 
         let mut size = 0;
 
-        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.with_layout(Layout::top_down(Align::Min), |ui| {
             let mut action = None;
 
             ui.scope(|ui| {
@@ -649,7 +619,17 @@ impl Struct {
                                 let (bytes, r) = if let Some(node) = self.nodes.get(&index) {
                                     node.borrow_mut().ui(ui, new_address, offset, state)
                                 } else {
-                                    Node::none_ui(ui, new_address, offset, None, state)
+                                    // TODO(emily): Kind of weird that node.ui handles the heading and yet
+                                    // none ui 'requires' us to rendering the heading here.
+                                    ui.allocate_ui_with_layout(
+                                        vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
+                                        Layout::left_to_right(Align::Center),
+                                        |ui| {
+                                            Node::none_ui_heading(ui, address, offset);
+                                            Node::none_ui(ui, new_address, offset, None, state)
+                                        },
+                                    )
+                                    .inner
                                 };
 
                                 if let Some(r) = r {
