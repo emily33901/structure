@@ -12,6 +12,24 @@ use crate::{
     Address, AddressResponse, State,
 };
 
+fn glyph_width(ui: &egui::Ui, c: char) -> f32 {
+    let font_id = ui
+        .style()
+        .override_text_style
+        .as_ref()
+        .unwrap()
+        .resolve(ui.style());
+
+    ui.fonts(|f| f.glyph_width(&font_id, c))
+}
+
+fn spacing(ui: &egui::Ui) -> f32 {
+    let glyph_width = glyph_width(ui, '.');
+    let spacing = 4.0 * glyph_width;
+
+    spacing
+}
+
 // TODO(emily): Need some way to collapse the view of Struct or Pointer
 // either do this here or in Struct::nodes
 #[derive(Debug)]
@@ -57,7 +75,7 @@ impl Node {
             Node::U8 | Node::U16 | Node::U32 | Node::U64 => NODE_UNIT_ROW_HEIGHT,
             Node::Struct(s) | Node::Pointer(s) => {
                 // NOTE(emily): Here we account for the extra padding in the egui table.
-                let extra = 15.0 + item_spacing_y;
+                let extra = 16.0 + item_spacing_y;
 
                 s.upgrade()
                     .map(|s| {
@@ -87,6 +105,8 @@ impl Node {
             |ui| {
                 let mut response = None;
 
+                let spacing = spacing(&ui);
+
                 {
                     let label =
                         egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
@@ -95,7 +115,7 @@ impl Node {
                     ui.add(label);
                 }
 
-                ui.add_space(20.0);
+                ui.add_space(spacing);
 
                 {
                     let label = egui::Label::new(RichText::new(&format!("{:016X}", address)))
@@ -104,7 +124,7 @@ impl Node {
                     ui.add(label);
                 }
 
-                ui.add_space(20.0);
+                ui.add_space(spacing);
 
                 match match self {
                     Node::Struct(s) => {
@@ -148,6 +168,8 @@ impl Node {
 
         response = response.or(self.node_heading(ui, address, offset_in_parent, state));
 
+        let spacing = spacing(&ui);
+
         let bytes = match self {
             Node::U64 => {
                 ui.label("U64");
@@ -173,13 +195,12 @@ impl Node {
                 response = response.or(r);
                 bytes
             }
-
             // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
             // Don't just copy paste it.
             Node::Struct(s) => {
                 let (bytes, r) = ui
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        ui.add_space(40.0);
+                        ui.add_space(spacing);
 
                         s.upgrade()
                             .map(|s| {
@@ -204,7 +225,7 @@ impl Node {
 
                 let (bytes, r) = ui
                     .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        ui.add_space(40.0);
+                        ui.add_space(spacing);
 
                         s.upgrade()
                             .map(|s| {
@@ -317,6 +338,9 @@ impl Node {
         // TODO(emily): The above is extra important once we have specific UI for each node type. As each node
         // needs to where to place its value, which should be in alignment with none_ui
 
+        let glyph_width = glyph_width(ui, '.');
+        let spacing = 4.0 * glyph_width;
+
         state.memory.get(address, &mut buffer);
 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -327,7 +351,7 @@ impl Node {
                 ui.add(label);
             }
 
-            ui.add_space(20.0);
+            ui.add_space(spacing);
 
             {
                 let label =
@@ -336,7 +360,7 @@ impl Node {
                 ui.add(label);
             }
 
-            ui.add_space(20.0);
+            ui.add_space(spacing);
 
             {
                 let padding = 8 - buffer.len();
@@ -352,7 +376,7 @@ impl Node {
                 ui.add(label);
             }
 
-            ui.add_space(20.0);
+            ui.add_space(spacing);
 
             {
                 let padding = 8 - buffer.len();
@@ -371,7 +395,7 @@ impl Node {
                 ui.add(label);
             }
 
-            ui.add_space(20.0);
+            ui.add_space(spacing);
 
             {
                 let bytes = &buffer;
