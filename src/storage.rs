@@ -35,11 +35,11 @@ mod v1 {
                 Node::U64 => crate::node::Node::U64,
                 Node::Struct(registry_id) => crate::node::Node::Struct(
                     Rc::downgrade(registry.structs.get(registry_id).unwrap()),
-                    0.0,
+                    RefCell::new(0.0),
                 ),
                 Node::Pointer(registry_id) => crate::node::Node::Pointer(
                     Rc::downgrade(registry.structs.get(registry_id).unwrap()),
-                    0.0,
+                    RefCell::new(0.0),
                 ),
             }
         }

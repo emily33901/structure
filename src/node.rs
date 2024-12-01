@@ -42,8 +42,8 @@ pub(crate) enum Node {
     U16,
     U32,
     U64,
-    Struct(Weak<RefCell<Struct>>, f32),
-    Pointer(Weak<RefCell<Struct>>, f32),
+    Struct(Weak<RefCell<Struct>>, RefCell<f32>),
+    Pointer(Weak<RefCell<Struct>>, RefCell<f32>),
 }
 
 impl Node {
@@ -80,6 +80,12 @@ impl Node {
             Self::Struct(s, openness) | Self::Pointer(s, openness) => {
                 // NOTE(emily): Here we account for the extra padding in the egui table.
                 let extra = 16.0 + item_spacing_y;
+
+                let openness = *openness.borrow();
+
+                if openness == 0.0 {
+                    return extra;
+                }
 
                 let height = s
                     .upgrade()
@@ -134,7 +140,7 @@ impl Node {
     }
 
     fn node_heading(
-        &mut self,
+        &self,
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
@@ -160,7 +166,11 @@ impl Node {
                         if let Some(collapsing) = collapsing {
                             let (_id, rect) =
                                 ui.allocate_space(egui::Vec2::splat(ui.spacing().icon_width));
-                            let response = ui.interact(rect, collapsing.id(), egui::Sense::click());
+                            let response = ui.interact(
+                                rect,
+                                ui.id().with(collapsing.id()),
+                                egui::Sense::click(),
+                            );
                             if response.clicked() {
                                 collapsing.toggle(ui);
                             }
@@ -173,17 +183,19 @@ impl Node {
                 match match self {
                     Self::Struct(s, o) => {
                         ui.label("Struct");
-                        *o = openness;
+                        *o.borrow_mut() = openness;
                         Some((address, s))
                     }
                     Self::Pointer(s, o) => {
                         ui.label("Pointer");
-                        *o = openness;
+                        *o.borrow_mut() = openness;
                         Some((state.memory.read(address), s))
                     }
                     _ => None,
                 } {
                     Some((address, s)) => {
+                        ui.add_space(spacing(ui));
+
                         response = response.or(s
                             .upgrade()
                             .map(|s| s.borrow().heading(s.clone(), ui, address, state))
@@ -203,11 +215,12 @@ impl Node {
     }
 
     fn node_struct_ui_inner(
-        &mut self,
+        &self,
         s: Weak<RefCell<Struct>>,
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
+        row_index_in_parent: usize,
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         let mut response = None;
@@ -218,9 +231,7 @@ impl Node {
 
         let spacing = spacing(ui);
 
-        let eid = egui::Id::new(s.borrow().id)
-            .with(address)
-            .with(offset_in_parent);
+        let eid = egui::Id::new(s.borrow().id).with(row_index_in_parent);
 
         // TODO(emily): Seems dumb that we have this special case for doing the struct types,
         // and then call this function which takes an option for collapsing
@@ -251,38 +262,40 @@ impl Node {
 
         response = response.or(r);
 
-        // Handle replacing Struct with a different Struct
-        let response = match response {
-            Some(AddressResponse::Replace(new_s)) => {
-                let (Self::Struct(s, _) | Self::Pointer(s, _)) = self else {
-                    panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
-                };
-
-                *s = Rc::downgrade(&new_s);
-                None
-            }
-            r => r,
-        };
-
         (bytes, response)
     }
 
     fn node_ui_inner(
-        &mut self,
+        &self,
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
+        row_index_in_parent: usize,
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         match self {
             Self::Struct(s, _) => {
                 let s = s.clone();
-                return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
+                return self.node_struct_ui_inner(
+                    s.clone(),
+                    ui,
+                    address,
+                    offset_in_parent,
+                    row_index_in_parent,
+                    state,
+                );
             }
             Self::Pointer(s, _) => {
                 let address = state.memory.read(address);
                 let s = s.clone();
-                return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
+                return self.node_struct_ui_inner(
+                    s.clone(),
+                    ui,
+                    address,
+                    offset_in_parent,
+                    row_index_in_parent,
+                    state,
+                );
             }
             Self::U8 | Self::U16 | Self::U32 | Self::U64 => {}
         }
@@ -322,10 +335,11 @@ impl Node {
     // NOTE(emily): address and offset are independent.
     // address is absolute and offset is where this is in a parent.
     fn ui(
-        &mut self,
+        &self,
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
+        row_index_in_parent: usize,
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         let height = self.height(ui.spacing().item_spacing.y);
@@ -335,13 +349,13 @@ impl Node {
             Self::Struct(_, _) | Self::Pointer(_, _) => Layout::top_down(Align::Min),
         };
 
-        let (bytes, response) = ui
-            .allocate_ui_with_layout(vec2(ui.available_width(), height), layout, |ui| {
-                self.node_ui_inner(ui, address, offset_in_parent, state)
+        ui.push_id((address, row_index_in_parent), |ui| {
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), height), layout, |ui| {
+                self.node_ui_inner(ui, address, offset_in_parent, row_index_in_parent, state)
             })
-            .inner;
-
-        (bytes, response)
+            .inner
+        })
+        .inner
     }
 
     fn context_menu(
@@ -450,13 +464,13 @@ impl Node {
         (|| {
             if ui.button("Pointer").clicked() {
                 return Some((
-                    Self::Pointer(Rc::downgrade(&registry.default_struct()), 0.0),
+                    Self::Pointer(Rc::downgrade(&registry.default_struct()), RefCell::new(0.0)),
                     row_index,
                 ));
             }
             if ui.button("Struct").clicked() {
                 return Some((
-                    Self::Struct(Rc::downgrade(&registry.default_struct()), 0.0),
+                    Self::Struct(Rc::downgrade(&registry.default_struct()), RefCell::new(0.0)),
                     row_index,
                 ));
             }
@@ -728,7 +742,23 @@ impl Struct {
                                 let new_address = address.wrapping_add(offset);
 
                                 let (bytes, r) = if let Some(node) = self.nodes.get(&index) {
-                                    node.borrow_mut().ui(ui, new_address, offset, state)
+                                    let (bytes, response) = node.borrow().ui(ui, new_address, offset, index, state);
+                                                        
+                                    // Handle replacing Struct with a different Struct
+                                    let response = match response {
+                                        Some(AddressResponse::Replace(new_s)) => {
+                                            let (Node::Struct(s, _) | Node::Pointer(s, _)) = &mut *node.borrow_mut() else {
+                                                panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
+                                            };
+
+                                            *s = Rc::downgrade(&new_s);
+                                            None
+                                        }
+                                        r => r,
+                                    };
+
+                                    (bytes, response)
+
                                 } else {
                                     // TODO(emily): Kind of weird that node.ui handles the heading and yet
                                     // none ui 'requires' us to rendering the heading here.

@@ -3,7 +3,6 @@ use std::{
     mem::offset_of,
 };
 
-
 use crate::memory::Memory;
 
 #[derive(Default)]
