@@ -42,15 +42,15 @@ pub(crate) enum Node {
     U16,
     U32,
     U64,
-    Struct(Weak<RefCell<Struct>>),
-    Pointer(Weak<RefCell<Struct>>),
+    Struct(Weak<RefCell<Struct>>, f32),
+    Pointer(Weak<RefCell<Struct>>, f32),
 }
 
 impl Node {
     fn row_count(&self) -> usize {
         match self {
-            Node::U64 | Node::U32 | Node::U16 | Node::U8 => 1,
-            Node::Pointer(s) | Node::Struct(s) => {
+            Self::U64 | Self::U32 | Self::U16 | Self::U8 => 1,
+            Self::Pointer(s, _) | Self::Struct(s, _) => {
                 s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1)
             }
         }
@@ -58,12 +58,12 @@ impl Node {
 
     fn byte_size(&self) -> usize {
         match self {
-            Node::U64 => 8,
-            Node::U32 => 4,
-            Node::U16 => 2,
-            Node::U8 => 1,
-            Node::Pointer(_) => 8,
-            Node::Struct(s) => s
+            Self::U64 => 8,
+            Self::U32 => 4,
+            Self::U16 => 2,
+            Self::U8 => 1,
+            Self::Pointer(_, _) => 8,
+            Self::Struct(s, _) => s
                 .upgrade()
                 .map(|s| {
                     let size = s.borrow().byte_size();
@@ -76,12 +76,13 @@ impl Node {
 
     fn height(&self, item_spacing_y: f32) -> f32 {
         match self {
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 => NODE_UNIT_ROW_HEIGHT,
-            Node::Struct(s) | Node::Pointer(s) => {
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 => NODE_UNIT_ROW_HEIGHT,
+            Self::Struct(s, openness) | Self::Pointer(s, openness) => {
                 // NOTE(emily): Here we account for the extra padding in the egui table.
                 let extra = 16.0 + item_spacing_y;
 
-                s.upgrade()
+                let height = s
+                    .upgrade()
                     .map(|s| {
                         let row_heights: f32 = s
                             .borrow()
@@ -89,9 +90,11 @@ impl Node {
                             .map(|x| x + item_spacing_y)
                             .sum();
 
-                        row_heights + extra
+                        row_heights
                     })
-                    .unwrap_or(NODE_UNIT_ROW_HEIGHT + extra)
+                    .unwrap_or(NODE_UNIT_ROW_HEIGHT);
+
+                height * openness + extra
             }
         }
     }
@@ -144,14 +147,17 @@ impl Node {
             |ui| {
                 let mut response = None;
 
+                let openness = collapsing
+                    .as_ref()
+                    .map(|collapsing| collapsing.openness(ui.ctx()).clone())
+                    .unwrap_or(0.0);
+
                 Self::heading_offset_and_address(
                     ui,
                     address,
                     offset_in_parent,
                     |ui: &mut egui::Ui| {
                         if let Some(collapsing) = collapsing {
-                            let openness = collapsing.openness(ui.ctx());
-
                             let (_id, rect) =
                                 ui.allocate_space(egui::Vec2::splat(ui.spacing().icon_width));
                             let response = ui.interact(rect, collapsing.id(), egui::Sense::click());
@@ -165,12 +171,14 @@ impl Node {
                 );
 
                 match match self {
-                    Node::Struct(s) => {
+                    Self::Struct(s, o) => {
                         ui.label("Struct");
+                        *o = openness;
                         Some((address, s))
                     }
-                    Node::Pointer(s) => {
+                    Self::Pointer(s, o) => {
                         ui.label("Pointer");
+                        *o = openness;
                         Some((state.memory.read(address), s))
                     }
                     _ => None,
@@ -246,7 +254,7 @@ impl Node {
         // Handle replacing Struct with a different Struct
         let response = match response {
             Some(AddressResponse::Replace(new_s)) => {
-                let (Node::Struct(s) | Node::Pointer(s)) = self else {
+                let (Self::Struct(s, _) | Self::Pointer(s, _)) = self else {
                     panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
                 };
 
@@ -267,16 +275,16 @@ impl Node {
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
         match self {
-            Node::Struct(s) => {
+            Self::Struct(s, _) => {
                 let s = s.clone();
                 return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
             }
-            Node::Pointer(s) => {
+            Self::Pointer(s, _) => {
                 let address = state.memory.read(address);
                 let s = s.clone();
                 return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
             }
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 => {}
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 => {}
         }
 
         // Show Offset and address
@@ -302,7 +310,7 @@ impl Node {
                     ui.label("U8");
                     Self::none_ui(ui, address, offset_in_parent, Some(1), state)
                 }
-                Self::Struct(_) | Self::Pointer(_) => unreachable!(),
+                Self::Struct(_, _) | Self::Pointer(_, _) => unreachable!(),
             })
             .inner;
 
@@ -323,8 +331,8 @@ impl Node {
         let height = self.height(ui.spacing().item_spacing.y);
 
         let layout = match self {
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 => Layout::left_to_right(Align::Center),
-            Node::Struct(_) | Node::Pointer(_) => Layout::top_down(Align::Min),
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 => Layout::left_to_right(Align::Center),
+            Self::Struct(_, _) | Self::Pointer(_, _) => Layout::top_down(Align::Min),
         };
 
         let (bytes, response) = ui
@@ -345,7 +353,7 @@ impl Node {
     ) -> Option<AddressResponse> {
         let mut response = None;
         match self {
-            Node::Struct(s) => {
+            Self::Struct(s, _) => {
                 if ui.button("Open struct in new tab").clicked() {
                     response = Some(AddressResponse::AddressStruct(
                         Some(registry.find_or_register_address(address.into())),
@@ -353,7 +361,7 @@ impl Node {
                     ))
                 }
             }
-            Node::Pointer(s) => {
+            Self::Pointer(s, _) => {
                 let address: usize = memory.read(address);
 
                 if ui.button("Open struct in new tab").clicked() {
@@ -442,27 +450,27 @@ impl Node {
         (|| {
             if ui.button("Pointer").clicked() {
                 return Some((
-                    Node::Pointer(Rc::downgrade(&registry.default_struct())),
+                    Self::Pointer(Rc::downgrade(&registry.default_struct()), 0.0),
                     row_index,
                 ));
             }
             if ui.button("Struct").clicked() {
                 return Some((
-                    Node::Struct(Rc::downgrade(&registry.default_struct())),
+                    Self::Struct(Rc::downgrade(&registry.default_struct()), 0.0),
                     row_index,
                 ));
             }
             if ui.button("U64").clicked() {
-                return Some((Node::U64, row_index));
+                return Some((Self::U64, row_index));
             }
             if ui.button("U32").clicked() {
-                return Some((Node::U32, row_index));
+                return Some((Self::U32, row_index));
             }
             if ui.button("U16").clicked() {
-                return Some((Node::U16, row_index));
+                return Some((Self::U16, row_index));
             }
             if ui.button("U8").clicked() {
-                return Some((Node::U8, row_index));
+                return Some((Self::U8, row_index));
             }
 
             None
