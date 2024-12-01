@@ -100,7 +100,7 @@ mod v1 {
                 structs: value
                     .structs
                     .iter()
-                    .map(|(k, v)| (*k, Rc::new(RefCell::new(v.make_real()))))
+                    .map(|(&k, v)| (k, Rc::new(RefCell::new(v.make_real(k)))))
                     .collect(),
                 addresses: value
                     .addresses
@@ -128,11 +128,13 @@ mod v1 {
     }
 
     impl Struct {
-        fn make_real(&self) -> crate::Struct {
+        fn make_real(&self, id: RegistryId) -> crate::Struct {
             crate::Struct {
                 name: self.name.clone(),
                 row_count: self.row_count,
-                ..Default::default()
+                id: id,
+                layout: Default::default(),
+                nodes: Default::default(),
             }
         }
 

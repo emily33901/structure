@@ -4,7 +4,11 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use egui::{ahash::HashMap, vec2, Align, InnerResponse, Layout, RichText};
+use egui::{
+    ahash::HashMap, collapsing_header::CollapsingState, vec2, Align, InnerResponse, Layout,
+    RichText,
+};
+use egui_extras::{Size, StripBuilder};
 
 use crate::{
     memory::{self, Memory},
@@ -92,26 +96,38 @@ impl Node {
         }
     }
 
-    fn none_ui_heading(ui: &mut egui::Ui, address: usize, offset_in_parent: usize) {
-        let spacing = spacing(&ui);
+    fn heading_offset_and_address<F: FnOnce(&mut egui::Ui)>(
+        ui: &mut egui::Ui,
+        address: usize,
+        offset_in_parent: usize,
+        f: F,
+    ) {
+        let glyph_width = glyph_width(ui, '.');
 
-        {
-            let label = egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
-                .selectable(false);
+        let collapsing_icon_width = ui.spacing().icon_width;
 
-            ui.add(label);
-        }
+        egui_extras::StripBuilder::new(ui)
+            .size(Size::exact(collapsing_icon_width))
+            .size(Size::exact(glyph_width * 8.0))
+            .size(Size::exact(glyph_width * 16.0 + glyph_width * 4.0))
+            .horizontal(|mut strip| {
+                strip.cell(f);
 
-        ui.add_space(spacing);
+                strip.cell(|ui| {
+                    let label =
+                        egui::Label::new(RichText::new(&format!("{:04}", offset_in_parent)))
+                            .selectable(false);
 
-        {
-            let label =
-                egui::Label::new(RichText::new(&format!("{:016X}", address))).selectable(true);
+                    ui.add(label);
+                });
 
-            ui.add(label);
-        }
+                strip.cell(|ui| {
+                    let label = egui::Label::new(RichText::new(&format!("{:016X}", address)))
+                        .selectable(true);
 
-        ui.add_space(spacing);
+                    ui.add(label);
+                });
+            });
     }
 
     fn node_heading(
@@ -119,6 +135,7 @@ impl Node {
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
+        collapsing: Option<&mut CollapsingState>,
         state: &mut State<'_>,
     ) -> Option<AddressResponse> {
         let response = ui.allocate_ui_with_layout(
@@ -127,7 +144,25 @@ impl Node {
             |ui| {
                 let mut response = None;
 
-                Self::none_ui_heading(ui, address, offset_in_parent);
+                Self::heading_offset_and_address(
+                    ui,
+                    address,
+                    offset_in_parent,
+                    |ui: &mut egui::Ui| {
+                        if let Some(collapsing) = collapsing {
+                            let openness = collapsing.openness(ui.ctx());
+
+                            let (_id, rect) =
+                                ui.allocate_space(egui::Vec2::splat(ui.spacing().icon_width));
+                            let response = ui.interact(rect, collapsing.id(), egui::Sense::click());
+                            if response.clicked() {
+                                collapsing.toggle(ui);
+                            }
+
+                            egui::collapsing_header::paint_default_icon(ui, openness, &response);
+                        }
+                    },
+                );
 
                 match match self {
                     Node::Struct(s) => {
@@ -159,78 +194,54 @@ impl Node {
         response.inner
     }
 
-    fn node_ui_inner(
+    fn node_struct_ui_inner(
         &mut self,
+        s: Weak<RefCell<Struct>>,
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
         state: &mut State<'_>,
     ) -> (usize, Option<AddressResponse>) {
-        // Show Offset and address
         let mut response = None;
 
-        response = response.or(self.node_heading(ui, address, offset_in_parent, state));
+        let Some(s) = s.upgrade() else {
+            return (8, None);
+        };
 
-        let spacing = spacing(&ui);
+        let spacing = spacing(ui);
 
-        let (bytes, r) = ui
-            .with_layout(Layout::left_to_right(Align::Min), |ui| {
-                match self {
-                    Node::U64 => {
-                        ui.label("U64");
-                        Node::none_ui(ui, address, offset_in_parent, Some(8), state)
-                    }
-                    Node::U32 => {
-                        ui.label("U32");
-                        Node::none_ui(ui, address, offset_in_parent, Some(4), state)
-                    }
-                    Node::U16 => {
-                        ui.label("U16");
-                        Node::none_ui(ui, address, offset_in_parent, Some(2), state)
-                    }
-                    Node::U8 => {
-                        ui.label("U8");
-                        Node::none_ui(ui, address, offset_in_parent, Some(1), state)
-                    }
-                    // TODO(emily): The layout between struct and pointer is very similar, probably identitcal.
-                    // Don't just copy paste it.
-                    Node::Struct(s) => {
-                        ui.add_space(spacing);
+        let eid = egui::Id::new(s.borrow().id)
+            .with(address)
+            .with(offset_in_parent);
 
-                        s.upgrade()
-                            .map(|s| {
-                                s.clone().borrow().ui(
-                                    s.clone(),
-                                    StructUiFlags::default(),
-                                    ui,
-                                    address,
-                                    state,
-                                )
-                            })
-                            .unwrap_or((8, None))
-                    }
-                    Node::Pointer(s) => {
-                        let address = state.memory.read(address);
+        // TODO(emily): Seems dumb that we have this special case for doing the struct types,
+        // and then call this function which takes an option for collapsing
+        // that we only have in this special case? Maybe just special case all the way down
+        let mut collapsing = CollapsingState::load_with_default_open(ui.ctx(), eid, false);
 
-                        ui.add_space(spacing);
+        response = response.or(self.node_heading(
+            ui,
+            address,
+            offset_in_parent,
+            Some(&mut collapsing),
+            state,
+        ));
 
-                        s.upgrade()
-                            .map(|s| {
-                                s.clone().borrow().ui(
-                                    s.clone(),
-                                    StructUiFlags::default(),
-                                    ui,
-                                    address,
-                                    state,
-                                )
-                            })
-                            .unwrap_or((8, None))
-                    }
-                }
+        let (bytes, r) = collapsing
+            .show_body_unindented(ui, |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add_space(spacing);
+
+                    s.clone()
+                        .borrow()
+                        .ui(s.clone(), StructUiFlags::default(), ui, address, state)
+                })
+                .inner
             })
-            .inner;
+            .map(|r| r.inner)
+            .unwrap_or((s.borrow().byte_size(), None));
 
-        let response = response.or(r);
+        response = response.or(r);
 
         // Handle replacing Struct with a different Struct
         let response = match response {
@@ -244,6 +255,58 @@ impl Node {
             }
             r => r,
         };
+
+        (bytes, response)
+    }
+
+    fn node_ui_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        address: usize,
+        offset_in_parent: usize,
+        state: &mut State<'_>,
+    ) -> (usize, Option<AddressResponse>) {
+        match self {
+            Node::Struct(s) => {
+                let s = s.clone();
+                return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
+            }
+            Node::Pointer(s) => {
+                let address = state.memory.read(address);
+                let s = s.clone();
+                return self.node_struct_ui_inner(s.clone(), ui, address, offset_in_parent, state);
+            }
+            Node::U8 | Node::U16 | Node::U32 | Node::U64 => {}
+        }
+
+        // Show Offset and address
+        let mut response = None;
+
+        response = response.or(self.node_heading(ui, address, offset_in_parent, None, state));
+
+        let (bytes, r) = ui
+            .with_layout(Layout::left_to_right(Align::Min), |ui| match self {
+                Self::U64 => {
+                    ui.label("U64");
+                    Self::none_ui(ui, address, offset_in_parent, Some(8), state)
+                }
+                Self::U32 => {
+                    ui.label("U32");
+                    Self::none_ui(ui, address, offset_in_parent, Some(4), state)
+                }
+                Self::U16 => {
+                    ui.label("U16");
+                    Self::none_ui(ui, address, offset_in_parent, Some(2), state)
+                }
+                Self::U8 => {
+                    ui.label("U8");
+                    Self::none_ui(ui, address, offset_in_parent, Some(1), state)
+                }
+                Self::Struct(_) | Self::Pointer(_) => unreachable!(),
+            })
+            .inner;
+
+        let response = response.or(r);
 
         (bytes, response)
     }
@@ -331,50 +394,40 @@ impl Node {
 
         state.memory.get(address, &mut buffer);
 
-        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            {
-                let padding = 8 - buffer.len();
-                let label = egui::Label::new(RichText::new(format!(
-                    "{}{}",
-                    buffer
+        StripBuilder::new(ui)
+            .size(Size::exact(glyph_width * 8.0 + glyph_width * 4.0))
+            .size(Size::exact(glyph_width * 24.0 + glyph_width * 4.0))
+            .size(Size::remainder())
+            .horizontal(|mut strip| {
+                strip.cell(|ui| {
+                    let text = buffer
                         .iter()
                         .map(|b| format!("{}", memory::ascii_byte(b)))
-                        .collect::<String>(),
-                    " ".repeat(padding)
-                )))
-                .selectable(true);
-                ui.add(label);
-            }
+                        .collect::<String>();
 
-            ui.add_space(spacing);
+                    let label = egui::Label::new(RichText::new(text)).selectable(true);
+                    ui.add(label);
+                });
 
-            {
-                let padding = 8 - buffer.len();
-
-                let label = egui::Label::new(RichText::new(format!(
-                    "{}{}",
-                    buffer
+                strip.cell(|ui| {
+                    let text = buffer
                         .iter()
                         .map(|b| format!("{b:02X}"))
                         .collect::<Vec<_>>()
-                        .join(" "),
-                    " ".repeat((padding * 2) + padding)
-                )))
-                .selectable(true);
+                        .join(" ");
 
-                ui.add(label);
-            }
+                    let label = egui::Label::new(RichText::new(text)).selectable(true);
 
-            ui.add_space(spacing);
+                    ui.add(label);
+                });
 
-            {
-                let bytes = &buffer;
-                if let Some(r) = memory::disect_bytes(state, bytes, ui) {
-                    response = Some(r);
-                }
-            }
-        });
-
+                strip.cell(|ui| {
+                    let bytes = &buffer;
+                    if let Some(r) = memory::disect_bytes(state, bytes, ui) {
+                        response = Some(r);
+                    }
+                });
+            });
         (buffer.len(), response)
     }
 
@@ -474,18 +527,68 @@ pub(crate) struct Struct {
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
     pub(crate) name: String,
+    pub(crate) id: RegistryId,
 }
 
-impl Default for Struct {
-    fn default() -> Self {
+pub(crate) struct StructBuilder {
+    pub(crate) layout: StructLayout,
+    pub(crate) row_count: usize,
+    /// Map of row to Node
+    pub(crate) nodes: HashMap<usize, RefCell<Node>>,
+    pub(crate) name: Option<String>,
+}
+
+impl StructBuilder {
+    pub(crate) fn new(
+        layout: StructLayout,
+        row_count: usize,
+        nodes: HashMap<usize, RefCell<Node>>,
+    ) -> Self {
+        Self {
+            layout,
+            row_count,
+            nodes,
+            name: None,
+        }
+    }
+
+    pub(crate) fn default() -> Self {
         Self {
             layout: Default::default(),
             row_count: 8,
             nodes: Default::default(),
-            name: "Default struct".into(),
+            name: None,
+        }
+    }
+
+    pub(crate) fn name(self, name: &str) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..self
+        }
+    }
+
+    pub(crate) fn build(self, id: RegistryId) -> Struct {
+        Struct {
+            layout: self.layout,
+            row_count: self.row_count,
+            nodes: self.nodes,
+            name: self.name.unwrap_or_else(|| format!("struct-{}", id)),
+            id,
         }
     }
 }
+
+// impl Default for Struct {
+//     fn default() -> Self {
+//         Self {
+//             layout: Default::default(),
+//             row_count: 8,
+//             nodes: Default::default(),
+//             name: "Default struct".into(),
+//         }
+//     }
+// }
 
 impl Struct {
     fn row_heights(&self, item_spacing_y: f32) -> StructRowHeightIterator<'_> {
@@ -525,7 +628,7 @@ impl Struct {
             Layout::left_to_right(Align::Center),
             |ui| {
                 {
-                    egui::ComboBox::new((ui.id(), address, &self.name), "")
+                    egui::ComboBox::new((self.id, address, &self.name), "")
                         .selected_text(&self.name)
                         .show_ui(ui, |ui| {
                             for (id, s) in &state.registry.structs {
@@ -625,7 +728,12 @@ impl Struct {
                                         vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
                                         Layout::left_to_right(Align::Center),
                                         |ui| {
-                                            Node::none_ui_heading(ui, address, offset);
+                                            Node::heading_offset_and_address(
+                                                ui,
+                                                address,
+                                                offset,
+                                                |ui| {},
+                                            );
                                             Node::none_ui(ui, new_address, offset, None, state)
                                         },
                                     )

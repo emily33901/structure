@@ -4,6 +4,7 @@ use serde::Serialize;
 use super::Address;
 use super::Pane;
 use crate::node::Struct;
+use crate::node::StructBuilder;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -34,12 +35,12 @@ impl Registry {
     }
 
     pub(crate) fn default_struct(&mut self) -> Rc<RefCell<Struct>> {
-        self.register_struct(Struct::default())
+        self.register_struct(StructBuilder::default())
     }
 
-    pub(crate) fn register_struct(&mut self, s: Struct) -> Rc<RefCell<Struct>> {
+    pub(crate) fn register_struct(&mut self, s: StructBuilder) -> Rc<RefCell<Struct>> {
         let id = self.next_id();
-        self.structs.insert(id, RefCell::new(s).into());
+        self.structs.insert(id, RefCell::new(s.build(id)).into());
         self.structs.get(&id).unwrap().clone()
     }
 
@@ -77,13 +78,7 @@ impl Registry {
     }
 
     pub(crate) fn struct_id(&self, s: &Rc<RefCell<Struct>>) -> Option<RegistryId> {
-        for (id, other_s) in &self.structs {
-            if Rc::ptr_eq(s, other_s) {
-                return Some(*id);
-            }
-        }
-
-        None
+        Some(s.borrow().id)
     }
 
     pub(crate) fn address_id(&self, address: &Rc<RefCell<Address>>) -> Option<RegistryId> {

@@ -130,15 +130,18 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
             egui::Layout::left_to_right(egui::Align::Min),
             |ui| {
                 ui.add_space(PANE_INNER_PAD);
+
                 ui.allocate_ui_with_layout(
                     vec2(ui.available_width(), ui.available_height() - PANE_INNER_PAD),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.add_space(PANE_INNER_PAD);
 
-                        if let Some(pane_response) = pane.ui(ui, &mut self.state) {
-                            self.options.pane_response = Some((tile_id, pane_response))
-                        }
+                        ui.push_id(tile_id, |ui| {
+                            if let Some(pane_response) = pane.ui(ui, &mut self.state) {
+                                self.options.pane_response = Some((tile_id, pane_response))
+                            }
+                        });
                     },
                 );
             },
@@ -287,8 +290,8 @@ impl Pane {
             .resizable(false)
             .column(Column::auto().at_least(20.0))
             .column(Column::auto().at_least(150.0))
-            .column(Column::remainder().at_most(200.0))
-            .column(Column::auto().at_most(15.0))
+            .column(Column::auto().at_most(160.0))
+            .column(Column::auto().at_most(16.0))
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .header(20.0, |mut header| {
                 for i in 0..3 {
@@ -352,7 +355,7 @@ impl Pane {
                     return Some(PaneResponse::Close);
                 };
 
-                let address_name_id = { egui::Id::new(ui.id()).with("address-name") };
+                let address_name_id = { egui::Id::new("address-name") };
 
                 ui.horizontal(|ui| {
                     ui.heading("Address");
@@ -710,7 +713,6 @@ impl eframe::App for App {
             } else {
                 ui.heading("No process selected");
             }
-
 
             let mut behavior = TreeBehavior {
                 options: &mut self.tree_options,

@@ -76,19 +76,23 @@ pub(crate) fn modules(memory: &mut Memory<'_>) -> Result<Vec<Module>> {
         return Ok(vec![]);
     };
 
-    let (remote_peb_address, remote_peb) = process.remote_peb()?;
+    let (remote_peb_address, remote_peb) = process.remote_peb_ldr()?;
 
     let head = remote_peb.InMemoryOrderModuleList;
-    let head_address = remote_peb_address + offset_of!(PEB_LDR_DATA, InMemoryOrderModuleList);
+    let head_address: usize = head.Blink as usize;
     let mut current_address = head.Flink as usize;
 
     let mut modules = vec![];
 
     while current_address != head_address {
         let current: LIST_ENTRY = memory.read(current_address);
-        let entry: LDR_DATA_TABLE_ENTRY = memory.read(unsafe {
-            current_address - offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks)
-        });
+        let entry: LDR_DATA_TABLE_ENTRY =
+            memory.read(current_address - offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));
+
+        // TODO(emily): Hacky hack
+        if entry.InMemoryOrderLinks.Flink as usize == current_address {
+            break;
+        }
 
         let address = entry.DllBase as usize;
 

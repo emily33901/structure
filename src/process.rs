@@ -84,7 +84,7 @@ impl OpenProcess {
         }
     }
 
-    pub(crate) fn remote_peb(&self) -> Result<(usize, PEB_LDR_DATA)> {
+    pub(crate) fn remote_peb_ldr(&self) -> Result<(usize, PEB_LDR_DATA)> {
         let mut process_information = PROCESS_BASIC_INFORMATION::default();
         let mut out_len = 0_u32;
         unsafe {
