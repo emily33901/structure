@@ -5,7 +5,7 @@ use std::{
 };
 
 use egui::{
-    ahash::HashMap, collapsing_header::CollapsingState, vec2, Align, InnerResponse, Layout,
+    ahash::HashMap, collapsing_header::CollapsingState, vec2, Align, Layout,
     RichText,
 };
 use egui_extras::{Size, StripBuilder};

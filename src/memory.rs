@@ -1,4 +1,4 @@
-use std::mem::{offset_of, MaybeUninit};
+use std::mem::MaybeUninit;
 
 use anyhow::Result;
 use egui::{ahash::HashMap, RichText};

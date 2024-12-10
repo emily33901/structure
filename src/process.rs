@@ -1,6 +1,6 @@
 use std::{
     ffi::c_void,
-    mem::{offset_of, MaybeUninit},
+    mem::MaybeUninit,
 };
 
 use windows::{
@@ -9,22 +9,10 @@ use windows::{
         Foundation::{CloseHandle, HANDLE, STATUS_SUCCESS},
         System::{
             Diagnostics::{
-                Debug::{
-                    ReadProcessMemory, IMAGE_NT_HEADERS64, IMAGE_SCN_CNT_CODE,
-                    IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_CNT_UNINITIALIZED_DATA,
-                    IMAGE_SECTION_HEADER,
-                },
+                Debug::ReadProcessMemory,
                 ToolHelp::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS},
             },
-            Kernel::LIST_ENTRY,
-            Memory::{
-                VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_IMAGE, MEM_MAPPED,
-                MEM_PRIVATE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-                PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
-            },
-            SystemServices::IMAGE_DOS_HEADER,
             Threading::{self, PEB, PEB_LDR_DATA, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
-            WindowsProgramming::LDR_DATA_TABLE_ENTRY,
         },
     },
 };

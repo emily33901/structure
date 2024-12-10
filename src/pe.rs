@@ -13,7 +13,6 @@ use windows::Win32::System::{
         PAGE_WRITECOPY,
     },
     SystemServices::IMAGE_DOS_HEADER,
-    Threading::PEB_LDR_DATA,
     WindowsProgramming::LDR_DATA_TABLE_ENTRY,
 };
 
