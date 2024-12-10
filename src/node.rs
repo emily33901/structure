@@ -768,7 +768,7 @@ impl Struct {
                                         |ui| {
                                             Node::heading_offset_and_address(
                                                 ui,
-                                                address,
+                                                new_address,
                                                 offset,
                                                 |ui| {},
                                             );

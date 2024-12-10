@@ -132,7 +132,11 @@ pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
 }
 
 fn demangle_msvc_typeinfo_name(name: &str) -> String {
-    let name_as_destructor = format!("?{}", &name[4..]);
-    let name = symbolic_demangle::demangle(&name_as_destructor);
-    name.to_string()
+    if name.len() > 4 {
+        let name_as_destructor = format!("?{}", &name[4..]);
+        let name = symbolic_demangle::demangle(&name_as_destructor);
+        name.to_string()
+    } else {
+        format!("!{}", name)
+    }
 }
