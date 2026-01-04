@@ -135,7 +135,6 @@ mod v1 {
                 name: self.name.clone(),
                 row_count: self.row_count,
                 id: id,
-                layout: Default::default(),
                 nodes: Default::default(),
             }
         }

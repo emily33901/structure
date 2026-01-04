@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use egui_tiles::{Container, TileId, Tiles};
 
-use crate::{registry::Registry, AddChild, Pane};
+use crate::{AddChild, Pane, registry::Registry};
 
 // pub(crate) struct CollapseState(HashMap<(usize, usize), Collapsed>);
 

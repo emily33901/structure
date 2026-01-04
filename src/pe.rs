@@ -1,4 +1,4 @@
-use std::{ffi::c_void, mem::offset_of};
+use std::{ffi::c_void, mem::offset_of, ops::Range, thread::current};
 
 use anyhow::Result;
 use windows::Win32::System::{
@@ -8,9 +8,9 @@ use windows::Win32::System::{
     },
     Kernel::LIST_ENTRY,
     Memory::{
-        VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE,
-        PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_READONLY, PAGE_READWRITE,
-        PAGE_WRITECOPY,
+        MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE,
+        PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+        VirtualQueryEx,
     },
     SystemServices::IMAGE_DOS_HEADER,
     WindowsProgramming::LDR_DATA_TABLE_ENTRY,
@@ -84,6 +84,9 @@ pub(crate) fn modules(memory: &mut Memory<'_>) -> Result<Vec<Module>> {
     let mut modules = vec![];
 
     while current_address != head_address {
+        if current_address == 0 {
+            break;
+        }
         let current: LIST_ENTRY = memory.read(current_address);
         let entry: LDR_DATA_TABLE_ENTRY =
             memory.read(current_address - offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));

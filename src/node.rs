@@ -11,9 +11,7 @@ use egui::{
 use egui_extras::{Size, StripBuilder};
 
 use crate::{
-    memory::{self, Memory},
-    registry::{Registry, RegistryId},
-    Address, AddressResponse, State,
+    Address, AddressResponse, State, memory::{self, Memory, highlightable_address_text}, registry::{Registry, RegistryId}
 };
 
 fn glyph_width(ui: &egui::Ui, c: char) -> f32 {
@@ -110,6 +108,7 @@ impl Node {
         address: usize,
         offset_in_parent: usize,
         f: F,
+        state: &mut State
     ) {
         let glyph_width = glyph_width(ui, '.');
 
@@ -131,10 +130,12 @@ impl Node {
                 });
 
                 strip.cell(|ui| {
-                    let label = egui::Label::new(RichText::new(&format!("{:016X}", address)))
+                    let label = egui::Label::new(highlightable_address_text(state, address,&format!("{:016X}", address)))
                         .selectable(true);
 
-                    ui.add(label);
+                    if ui.add(label).hovered() {
+                        state.new_highlighted_address = Some(address)
+                    }
                 });
             });
     }
@@ -178,6 +179,7 @@ impl Node {
                             egui::collapsing_header::paint_default_icon(ui, openness, &response);
                         }
                     },
+                    state
                 );
 
                 match match self {
@@ -236,7 +238,7 @@ impl Node {
         // TODO(emily): Seems dumb that we have this special case for doing the struct types,
         // and then call this function which takes an option for collapsing
         // that we only have in this special case? Maybe just special case all the way down
-        let mut collapsing = CollapsingState::load_with_default_open(ui.ctx(), eid, false);
+        let mut collapsing = CollapsingState::load_with_default_open(ui.ctx(), eid, true);
 
         response = response.or(self.node_heading(
             ui,
@@ -537,14 +539,8 @@ pub(crate) struct StructUiFlags {
     pub(crate) top_level: bool,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct StructLayout {
-    collapse: HashMap<usize, bool>,
-}
-
 #[derive(Debug)]
 pub(crate) struct Struct {
-    pub(crate) layout: StructLayout,
     pub(crate) row_count: usize,
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
@@ -553,7 +549,6 @@ pub(crate) struct Struct {
 }
 
 pub(crate) struct StructBuilder {
-    pub(crate) layout: StructLayout,
     pub(crate) row_count: usize,
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
@@ -562,12 +557,10 @@ pub(crate) struct StructBuilder {
 
 impl StructBuilder {
     pub(crate) fn new(
-        layout: StructLayout,
         row_count: usize,
         nodes: HashMap<usize, RefCell<Node>>,
     ) -> Self {
         Self {
-            layout,
             row_count,
             nodes,
             name: None,
@@ -576,7 +569,6 @@ impl StructBuilder {
 
     pub(crate) fn default() -> Self {
         Self {
-            layout: Default::default(),
             row_count: 8,
             nodes: Default::default(),
             name: None,
@@ -592,7 +584,6 @@ impl StructBuilder {
 
     pub(crate) fn build(self, id: RegistryId) -> Struct {
         Struct {
-            layout: self.layout,
             row_count: self.row_count,
             nodes: self.nodes,
             name: self.name.unwrap_or_else(|| format!("struct-{}", id)),
@@ -771,6 +762,7 @@ impl Struct {
                                                 new_address,
                                                 offset,
                                                 |ui| {},
+                                                state,
                                             );
                                             Node::none_ui(ui, new_address, offset, None, state)
                                         },

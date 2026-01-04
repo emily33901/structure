@@ -1,13 +1,13 @@
 use std::mem::MaybeUninit;
 
 use anyhow::Result;
-use egui::{ahash::HashMap, RichText};
+use egui::{Color32, RichText, ahash::HashMap};
 
 use crate::{
+    AddressResponse, State,
     pe::{Section, SectionCategory},
     process::OpenProcess,
     rtti::Rtti,
-    AddressResponse, State,
 };
 
 pub(crate) fn interpret_as<T: Sized>(bytes: &[u8]) -> &T {
@@ -67,11 +67,6 @@ pub(crate) fn rtti_if_address_is_vtable<'a>(
             .rtti
             .get(state.memory.read(address - 8), state.memory)?,
     )
-
-    // TODO(emily): This is wrong, this is the type_info vtable ptr
-    // if rtti.vtable != address {
-    //     return false;
-    // }
 }
 
 pub(crate) fn disect_bytes(
@@ -111,7 +106,14 @@ pub(crate) fn disect_bytes(
             format!("{:016X}", value)
         };
 
-        let r = ui.add(egui::Label::new(RichText::new(&address_text)).sense(egui::Sense::click()));
+        let r = ui.add(
+            egui::Label::new(highlightable_address_text(state, value, address_text))
+                .sense(egui::Sense::click()),
+        );
+
+        if r.hovered() {
+            state.new_highlighted_address = Some(value);
+        }
 
         if r.clicked() {
             response = Some(AddressResponse::AddressStruct(
@@ -122,10 +124,32 @@ pub(crate) fn disect_bytes(
 
         if let Some(rtti) = rtti_if_address_is_vtable(state, value) {
             ui.label(rtti.names.join(" : "));
+        } else {
+            let address = state.memory.read(value);
+            if let Some(rtti) = rtti_if_address_is_vtable(state, address) {
+                ui.label(format!("-> {}", rtti.names.join(" : ")));
+            }
         }
     });
 
     response
+}
+
+pub(crate) fn highlightable_address_text(
+    state: &mut State,
+    address: usize,
+    text: impl Into<String>,
+) -> egui::RichText {
+    let mut text = RichText::new(text);
+
+    if let Some(highlighted_address) = state.highlighted_address
+        && highlighted_address == address
+    {
+        eprintln!("address highlighted");
+        text = text.background_color(Color32::DARK_RED);
+    }
+
+    text
 }
 
 const MEMORY_PAGE_LEN: usize = 4096;

@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize, Debug)]
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize, Debug, PartialOrd, Ord)]
 pub(crate) struct RegistryId(pub usize);
 
 impl std::fmt::Display for RegistryId {
@@ -21,6 +21,7 @@ impl std::fmt::Display for RegistryId {
 #[derive(Default)]
 pub(crate) struct Registry {
     pub(crate) next_id: usize,
+    // TODO(emily): Consider using an index map
     pub(crate) structs: HashMap<RegistryId, Rc<RefCell<Struct>>>,
     pub(crate) addresses: HashMap<RegistryId, Rc<RefCell<Address>>>,
 

@@ -6,7 +6,7 @@ use std::{
 use crate::memory::Memory;
 
 #[derive(Default)]
-pub(crate) struct RttiCache(HashMap<usize, Rtti>);
+pub(crate) struct RttiCache(HashMap<usize, Option<Rtti>>);
 
 impl RttiCache {
     pub(crate) fn get(&mut self, address: usize, memory: &mut Memory<'_>) -> Option<&Rtti> {
@@ -14,19 +14,18 @@ impl RttiCache {
         match entry {
             Entry::Occupied(occupied_entry) => {
                 let v = occupied_entry.into_mut();
-                Some(v)
+                v.as_ref()
             }
             Entry::Vacant(vacant_entry) => {
-                let Some(rtti) = rtti(address, memory) else {
-                    return None;
-                };
+                let rtti = rtti(address, memory);
 
-                Some(vacant_entry.insert(rtti))
+                vacant_entry.insert(rtti).as_ref()
             }
         }
     }
 }
 
+#[derive(Debug)]
 #[repr(C)]
 struct RTTICompleteObjectLocator {
     signature: u32,
@@ -44,6 +43,7 @@ struct RTTITypeDescriptor {
     name_bytes: i8,
 }
 
+#[derive(Debug)]
 #[repr(C)]
 struct RTTIClassHierarchyDescriptor {
     signature: u32,
@@ -122,8 +122,12 @@ pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
             &mut buffer,
         );
 
-        let type_name =
-            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr() as *const _) }.to_string_lossy();
+        let Ok(type_name) =
+            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr() as *const _) }.to_str()
+        else {
+            eprintln!("ignoring offset {base_class_offset} because it is not valid utf-8");
+            continue;
+        };
 
         rtti.names.push(demangle_msvc_typeinfo_name(&type_name));
     }
