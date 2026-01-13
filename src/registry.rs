@@ -58,7 +58,7 @@ impl Registry {
     // TODO(emily): We should have some distinction between a named address and an unamed address
     // because here we would like to be able to pass in either a named or unnamed address.
     pub(crate) fn find_or_register_address(&mut self, address: Address) -> Rc<RefCell<Address>> {
-        for (key, v) in &self.addresses {
+        for (_key, v) in &self.addresses {
             if **v.borrow() == *address {
                 return v.clone();
             }

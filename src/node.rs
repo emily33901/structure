@@ -1,16 +1,8 @@
-use core::f32;
-use std::{
-    cell::RefCell,
-    rc::{Rc, Weak},
-};
+use std::cell::RefCell;
 
-use egui::{Align, Layout, RichText, ahash::HashMap, collapsing_header::CollapsingState, vec2};
-use egui_extras::{Size, StripBuilder};
 
 use crate::{
-    Address, AddressResponse, State,
-    memory::{self, Memory, highlightable_address_text},
-    registry::{Registry, RegistryId},
+    AddressResponse, State,
 };
 
 type StructActionFn = dyn FnOnce(&RefCell<State>);

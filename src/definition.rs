@@ -1,17 +1,12 @@
 use core::f32;
 use std::{
     cell::RefCell,
-    rc::{Rc, Weak},
+    rc::Weak,
 };
 
-use egui::{Align, Layout, RichText, ahash::HashMap, collapsing_header::CollapsingState, vec2};
-use egui_extras::{Size, StripBuilder};
+use egui::ahash::HashMap;
 
-use crate::{
-    Address, AddressResponse, State,
-    memory::{self, Memory, highlightable_address_text},
-    registry::{Registry, RegistryId},
-};
+use crate::registry::RegistryId;
 
 #[derive(Debug)]
 pub(crate) enum Node {

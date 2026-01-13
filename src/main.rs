@@ -1,18 +1,15 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
-    rc::{Rc, Weak},
+    rc::Rc,
 };
 
-use egui::{ScrollArea, Theme, vec2};
-use egui_extras::Column;
+use egui::{Theme, vec2};
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
-use node::{StructAction, StructUiFlags};
 use pe::{Module, Section};
 use process::{OpenProcess, Process};
 use project::{Layout, Project};
-use registry::{Registry, RegistryId};
+use registry::Registry;
 use rtti::RttiCache;
 
 use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse};
@@ -355,7 +352,7 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.test.value += 1;
 
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -385,7 +382,7 @@ impl eframe::App for App {
             // TODO(emily): Handle these higher up than in process, so that we can make use of Memory
             // and its paging
             {
-                if let Some(process) = self.open_process.as_ref() {
+                if let Some(_process) = self.open_process.as_ref() {
                     self.modules = pe::modules(&mut memory).ok();
                     self.sections = pe::sections(&mut memory).ok();
 

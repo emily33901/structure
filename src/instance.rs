@@ -1,7 +1,6 @@
 use std::{
     cell::{Ref, RefCell},
-    collections::HashMap,
-    rc::{Rc, Weak},
+    rc::Rc,
 };
 
 use egui::{Align, Layout, RichText, collapsing_header::CollapsingState, vec2};
@@ -309,7 +308,7 @@ impl<'a> NodeInstance<'a> {
         // needs to where to place its value, which should be in alignment with none_ui
 
         let glyph_width = ui::glyph_width(ui, '.');
-        let spacing = 4.0 * glyph_width;
+        let _spacing = 4.0 * glyph_width;
 
         state.borrow_mut().memory.get(address, &mut buffer);
 
@@ -409,13 +408,13 @@ impl StructInstance {
         self.definition.borrow().id
     }
 
-    fn name(&self) -> Ref<str> {
+    fn name(&self) -> Ref<'_, str> {
         Ref::map(self.definition.borrow(), |definition| {
             definition.name.as_str()
         })
     }
 
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance> {
+    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
         let definition = self.definition.borrow();
         let node_definition =
             Ref::filter_map(definition, |definition| definition.nodes.get(&row)).ok()?;
@@ -527,7 +526,7 @@ impl StructInstance {
             style.override_text_style = Some(egui::TextStyle::Monospace);
 
             let heights = self.row_heights(ui.spacing().item_spacing.y, ui.ctx(), state);
-            let self_name = self.name();
+            let _self_name = self.name();
 
             egui_extras::TableBuilder::new(ui)
                 // .id_salt((address, &self_name))
@@ -558,7 +557,7 @@ impl StructInstance {
                                             ui,
                                             new_address,
                                             offset,
-                                            |ui| {},
+                                            |_ui| {},
                                             state,
                                         );
 
@@ -658,7 +657,7 @@ struct StructRowHeightIterator<'instance, 'state, 'state_owner> {
 }
 
 impl<'a, 'b, 'c> StructRowHeightIterator<'a, 'b, 'c> {
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance> {
+    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
         self.instance.node(row, address, offset)
     }
 

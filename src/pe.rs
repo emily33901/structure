@@ -1,4 +1,4 @@
-use std::{ffi::c_void, mem::offset_of, ops::Range, thread::current};
+use std::{ffi::c_void, mem::offset_of};
 
 use anyhow::Result;
 use windows::Win32::System::{
@@ -75,7 +75,7 @@ pub(crate) fn modules(memory: &mut Memory<'_>) -> Result<Vec<Module>> {
         return Ok(vec![]);
     };
 
-    let (remote_peb_address, remote_peb) = process.remote_peb_ldr()?;
+    let (_remote_peb_address, remote_peb) = process.remote_peb_ldr()?;
 
     let head = remote_peb.InMemoryOrderModuleList;
     let head_address: usize = head.Blink as usize;
@@ -87,7 +87,7 @@ pub(crate) fn modules(memory: &mut Memory<'_>) -> Result<Vec<Module>> {
         if current_address == 0 {
             break;
         }
-        let current: LIST_ENTRY = memory.read(current_address);
+        let _current: LIST_ENTRY = memory.read(current_address);
         let entry: LDR_DATA_TABLE_ENTRY =
             memory.read(current_address - offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));
 

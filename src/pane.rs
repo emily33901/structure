@@ -4,7 +4,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::process::{self, Process};
+use crate::process::Process;
 use crate::registry::RegistryId;
 use crate::{Address, instance::StructInstance};
 use crate::{
@@ -126,7 +126,7 @@ impl Pane {
                     return;
                 };
 
-                let address_name_id = { egui::Id::new("address-name") };
+                let _address_name_id = { egui::Id::new("address-name") };
 
                 ui.horizontal(|ui| {
                     ui.heading("Address");
@@ -187,7 +187,7 @@ impl Pane {
                             ui.label(format!("{:016X}", **address.borrow()));
                         });
                     },
-                    |address, state| PaneResponse::OpenAddress(address.clone()),
+                    |address, _state| PaneResponse::OpenAddress(address.clone()),
                     &["id", "address", "name"],
                     state,
                 ) {

@@ -238,7 +238,7 @@ impl<'a> Memory<'a> {
         unsafe { value.assume_init() }
     }
 
-    pub(crate) fn reader(&'a mut self, range: std::ops::Range<usize>) -> MemoryReader {
+    pub(crate) fn reader(&'a mut self, range: std::ops::Range<usize>) -> MemoryReader<'a> {
         MemoryReader {
             memory: self,
             range,

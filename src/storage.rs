@@ -244,7 +244,7 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
     fn clone_tile(
         &self,
         old_pane: &TPaneA,
-        old_tiles: &egui_tiles::Tiles<TPaneA>,
+        _old_tiles: &egui_tiles::Tiles<TPaneA>,
         new_tiles: &mut egui_tiles::Tiles<TPaneB>,
     ) -> Option<egui_tiles::TileId> {
         (self.convert_pane)(old_pane, &self.registry).map(|pane| new_tiles.insert_pane(pane))
