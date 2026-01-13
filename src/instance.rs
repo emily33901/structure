@@ -122,8 +122,8 @@ impl<'a> NodeInstance<'a> {
                 strip.cell(left_f);
 
                 strip.cell(|ui| {
-                    let label = egui::Label::new(RichText::new(format!("{:04}", offset)))
-                        .selectable(false);
+                    let label =
+                        egui::Label::new(RichText::new(format!("{:04}", offset))).selectable(false);
 
                     ui.add(label);
                 });
@@ -273,20 +273,21 @@ impl<'a> NodeInstance<'a> {
 
     fn context_menu(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         if let Some(struct_instance) = self.struct_instance(state)
-            && ui.button("Open struct in new tab").clicked() {
-                let address = state
-                    .borrow_mut()
-                    .registry
-                    .find_or_register_address(self.address.into());
+            && ui.button("Open struct in new tab").clicked()
+        {
+            let address = state
+                .borrow_mut()
+                .registry
+                .find_or_register_address(self.address.into());
 
-                state
-                    .borrow_mut()
-                    .this_frame
-                    .response(AddressResponse::AddressStruct(
-                        Some(address),
-                        Some(struct_instance.definition),
-                    ))
-            }
+            state
+                .borrow_mut()
+                .this_frame
+                .response(AddressResponse::AddressStruct(
+                    Some(address),
+                    Some(struct_instance.definition),
+                ))
+        }
     }
 
     fn none_ui_inner(

@@ -62,9 +62,7 @@ pub(crate) fn rtti_if_address_is_vtable<'a>(
     }
 
     // Then see if the RTTI descriptor points back to the vtable
-    state
-            .rtti
-            .get(state.memory.read(address - 8), state.memory)
+    state.rtti.get(state.memory.read(address - 8), state.memory)
 }
 
 pub(crate) fn disect_bytes(

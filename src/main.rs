@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use egui::{Theme, vec2};
 use egui_tiles::{Tile, TileId, Tiles};

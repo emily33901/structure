@@ -1,7 +1,4 @@
-use std::{
-    ffi::c_void,
-    mem::MaybeUninit,
-};
+use std::{ffi::c_void, mem::MaybeUninit};
 
 use windows::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
@@ -10,14 +7,14 @@ use windows::{
         System::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
-                ToolHelp::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS},
+                ToolHelp::{PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS},
             },
             Threading::{self, PEB, PEB_LDR_DATA, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
         },
     },
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 pub(crate) struct OpenProcess(HANDLE);
 

@@ -11,7 +11,6 @@ pub fn glyph_width(ui: &egui::Ui, c: char) -> f32 {
 
 pub fn spacing(ui: &egui::Ui) -> f32 {
     let glyph_width = glyph_width(ui, '.');
-    
 
     6.0 * glyph_width
 }

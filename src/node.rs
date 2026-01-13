@@ -1,9 +1,6 @@
 use std::cell::RefCell;
 
-
-use crate::{
-    AddressResponse, State,
-};
+use crate::{AddressResponse, State};
 
 type StructActionFn = dyn FnOnce(&RefCell<State>);
 

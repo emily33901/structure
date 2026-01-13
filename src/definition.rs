@@ -1,8 +1,5 @@
 use core::f32;
-use std::{
-    cell::RefCell,
-    rc::Weak,
-};
+use std::{cell::RefCell, rc::Weak};
 
 use egui::ahash::HashMap;
 

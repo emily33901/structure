@@ -267,9 +267,10 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
 
                     if let Some(new_tile) = new_tile {
                         if let Some(t) = tabs.active
-                            && t == *tile {
-                                new_active_tile = Some(new_tile);
-                            }
+                            && t == *tile
+                        {
+                            new_active_tile = Some(new_tile);
+                        }
 
                         new_tabs.push(new_tile);
                     }
