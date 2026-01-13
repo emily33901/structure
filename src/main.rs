@@ -79,7 +79,7 @@ impl Default for Test {
         Self {
             value: 0,
             test: "Nice test string".into(),
-            test_constant_string: &TEST_CONSTANT_STRING,
+            test_constant_string: TEST_CONSTANT_STRING,
         }
     }
 }
@@ -134,7 +134,7 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
                         ui.add_space(PANE_INNER_PAD);
 
                         ui.push_id(tile_id, |ui| {
-                            pane.ui(ui, &mut self.state);
+                            pane.ui(ui, self.state);
                         });
                     },
                 );

@@ -121,7 +121,7 @@ impl Struct {
 }
 
 fn node_none_byte_size_rules(bytes: usize) -> usize {
-    if bytes % 8 == 0 {
+    if bytes.is_multiple_of(8) {
         8
     } else if bytes % 8 == 4 {
         4

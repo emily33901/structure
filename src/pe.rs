@@ -108,11 +108,11 @@ pub(crate) fn modules(memory: &mut Memory<'_>) -> Result<Vec<Module>> {
                 let len = entry.FullDllName.Length as usize / 2;
                 let mut buffer = vec![0_u16; len];
                 unsafe {
-                    let mut buffer_bytes = std::slice::from_raw_parts_mut(
+                    let buffer_bytes = std::slice::from_raw_parts_mut(
                         buffer.as_mut_ptr() as *mut _,
                         entry.FullDllName.Length as usize,
                     );
-                    memory.get(entry.FullDllName.Buffer.0 as usize, &mut buffer_bytes);
+                    memory.get(entry.FullDllName.Buffer.0 as usize, buffer_bytes);
                     String::from_utf16_lossy(std::slice::from_raw_parts(buffer.as_ptr(), len))
                 }
             },

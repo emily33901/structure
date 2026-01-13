@@ -28,7 +28,7 @@ impl<'a> NodeInstance<'a> {
         Self {
             address,
             offset_in_parent,
-            definition: definition,
+            definition,
         }
     }
 
@@ -122,7 +122,7 @@ impl<'a> NodeInstance<'a> {
                 strip.cell(left_f);
 
                 strip.cell(|ui| {
-                    let label = egui::Label::new(RichText::new(&format!("{:04}", offset)))
+                    let label = egui::Label::new(RichText::new(format!("{:04}", offset)))
                         .selectable(false);
 
                     ui.add(label);
@@ -132,7 +132,7 @@ impl<'a> NodeInstance<'a> {
                     let label = egui::Label::new(highlightable_address_text(
                         state,
                         address,
-                        &format!("{:016X}", address),
+                        format!("{:016X}", address),
                     ))
                     .selectable(true);
 
@@ -260,8 +260,7 @@ impl<'a> NodeInstance<'a> {
             };
 
             self.none_ui(ui, Some(size), state);
-        })
-        .inner;
+        });
     }
 
     fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
@@ -273,8 +272,8 @@ impl<'a> NodeInstance<'a> {
     }
 
     fn context_menu(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
-        if let Some(struct_instance) = self.struct_instance(state) {
-            if ui.button("Open struct in new tab").clicked() {
+        if let Some(struct_instance) = self.struct_instance(state)
+            && ui.button("Open struct in new tab").clicked() {
                 let address = state
                     .borrow_mut()
                     .registry
@@ -288,7 +287,6 @@ impl<'a> NodeInstance<'a> {
                         Some(struct_instance.definition),
                     ))
             }
-        }
     }
 
     fn none_ui_inner(
@@ -434,7 +432,7 @@ impl StructInstance {
         StructRowHeightIterator {
             ctx: ctx.clone(),
             instance: self,
-            state: state,
+            state,
             cur_offset: 0,
             cur_row: 0,
             row_count: self.row_count(),
@@ -486,7 +484,7 @@ impl StructInstance {
 
                         ui.separator();
 
-                        if ui.button(format!("New struct")).clicked() {
+                        if ui.button("New struct".to_string()).clicked() {
                             let default_struct = state.registry.default_struct();
                             state
                                 .this_frame
@@ -622,25 +620,21 @@ impl StructInstance {
                     });
                 });
 
-            match action {
-                Some(action) => {
-                    state.borrow_mut().this_frame.response(StructAction::new({
-                        let definition = self.definition.clone();
-                        move |_registry| {
-                            let mut definition = definition.borrow_mut();
-                            match action {
-                                MakeNodeAction::Add(node, offset) => {
-                                    definition.nodes.insert(offset, RefCell::new(node));
-                                }
-                                MakeNodeAction::Remove(row) => {
-                                    definition.nodes.remove(&row);
-                                }
+            if let Some(action) = action {
+                state.borrow_mut().this_frame.response(StructAction::new({
+                    let definition = self.definition.clone();
+                    move |_registry| {
+                        let mut definition = definition.borrow_mut();
+                        match action {
+                            MakeNodeAction::Add(node, offset) => {
+                                definition.nodes.insert(offset, RefCell::new(node));
+                            }
+                            MakeNodeAction::Remove(row) => {
+                                definition.nodes.remove(&row);
                             }
                         }
-                    }));
-                }
-
-                None => {}
+                    }
+                }));
             }
         });
     }
@@ -697,7 +691,7 @@ impl<'a, 'b, 'c> Iterator for StructRowHeightIterator<'a, 'b, 'c> {
 }
 
 fn none_ui_rules(bytes: usize) -> usize {
-    if bytes % 8 == 0 {
+    if bytes.is_multiple_of(8) {
         8
     } else if bytes % 8 == 4 {
         4

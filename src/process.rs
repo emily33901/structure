@@ -24,7 +24,7 @@ pub(crate) struct OpenProcess(HANDLE);
 impl OpenProcess {
     pub(crate) fn new(pid: u32) -> Result<Self> {
         unsafe {
-            let handle = Threading::OpenProcess(PROCESS_ALL_ACCESS, false, pid as u32)?;
+            let handle = Threading::OpenProcess(PROCESS_ALL_ACCESS, false, pid)?;
 
             eprintln!("process handle is {handle:?}");
 

@@ -96,14 +96,14 @@ pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
 
     let mut base_class_offsets = vec![0_u32; class_hierarchy_descriptor.base_class_count as usize];
 
-    let mut base_class_offsets_bytes = unsafe {
+    let base_class_offsets_bytes = unsafe {
         std::slice::from_raw_parts_mut(
             base_class_offsets.as_mut_ptr() as *mut u8,
             class_hierarchy_descriptor.base_class_count as usize * std::mem::size_of::<u32>(),
         )
     };
 
-    memory.get(base_class_array_address, &mut base_class_offsets_bytes);
+    memory.get(base_class_array_address, base_class_offsets_bytes);
 
     let mut rtti = Rtti { names: vec![] };
 
@@ -129,7 +129,7 @@ pub fn rtti(address: usize, memory: &mut Memory<'_>) -> Option<Rtti> {
             continue;
         };
 
-        rtti.names.push(demangle_msvc_typeinfo_name(&type_name));
+        rtti.names.push(demangle_msvc_typeinfo_name(type_name));
     }
 
     Some(rtti)

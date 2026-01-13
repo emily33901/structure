@@ -11,9 +11,9 @@ pub fn glyph_width(ui: &egui::Ui, c: char) -> f32 {
 
 pub fn spacing(ui: &egui::Ui) -> f32 {
     let glyph_width = glyph_width(ui, '.');
-    let spacing = 6.0 * glyph_width;
+    
 
-    spacing
+    6.0 * glyph_width
 }
 
 pub const NODE_UNIT_ROW_HEIGHT: f32 = 18.0;

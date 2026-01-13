@@ -62,11 +62,9 @@ pub(crate) fn rtti_if_address_is_vtable<'a>(
     }
 
     // Then see if the RTTI descriptor points back to the vtable
-    Some(
-        state
+    state
             .rtti
-            .get(state.memory.read(address - 8), state.memory)?,
-    )
+            .get(state.memory.read(address - 8), state.memory)
 }
 
 pub(crate) fn disect_bytes(
@@ -79,8 +77,8 @@ pub(crate) fn disect_bytes(
     let value = *interpret_as::<usize>(bytes);
 
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.add(egui::Label::new(RichText::new(&format!("{}", value))));
-        ui.add(egui::Label::new(RichText::new(&format!("0x{:X}", value))));
+        ui.add(egui::Label::new(RichText::new(format!("{}", value))));
+        ui.add(egui::Label::new(RichText::new(format!("0x{:X}", value))));
 
         if value == 0 {
             return;
@@ -170,7 +168,7 @@ pub(crate) enum Memory<'a> {
 impl<'a> Memory<'a> {
     pub(crate) fn new_process(process: &'a OpenProcess) -> Self {
         Self::Process {
-            process: process,
+            process,
             pages: Default::default(),
         }
     }

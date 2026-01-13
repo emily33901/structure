@@ -245,7 +245,7 @@ impl Pane {
                 let processes: Vec<_> = state
                     .borrow()
                     .processes
-                    .into_iter()
+                    .iter()
                     .filter(|p| p.name.contains(matching.as_str()))
                     .collect();
 
@@ -306,7 +306,7 @@ impl Pane {
         match self {
             Pane::AddressStruct { r#struct, address } => {
                 let Some((r#struct, address)) = r#struct.upgrade().zip(address.upgrade()) else {
-                    return format!("Invalid struct or address");
+                    return "Invalid struct or address".to_string();
                 };
 
                 format!("{} @ {:016X}", r#struct.borrow().name, **address.borrow())
@@ -344,14 +344,14 @@ pub enum AddChild {
     ProcessList,
 }
 
-impl Into<PaneResponse> for AddressResponse {
-    fn into(self) -> PaneResponse {
-        PaneResponse::AddressStructResponse(self)
+impl From<AddressResponse> for PaneResponse {
+    fn from(val: AddressResponse) -> Self {
+        PaneResponse::AddressStructResponse(val)
     }
 }
 
-impl Into<PaneResponse> for StructAction {
-    fn into(self) -> PaneResponse {
-        PaneResponse::AddressStructResponse(AddressResponse::Action(self))
+impl From<StructAction> for PaneResponse {
+    fn from(val: StructAction) -> Self {
+        PaneResponse::AddressStructResponse(AddressResponse::Action(val))
     }
 }

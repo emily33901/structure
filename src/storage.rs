@@ -114,7 +114,7 @@ mod v1 {
 
             for (id, s) in value.structs {
                 s.populate_nodes(
-                    &mut *registry.structs.get(&id).unwrap().borrow_mut(),
+                    &mut registry.structs.get(&id).unwrap().borrow_mut(),
                     &registry,
                 );
             }
@@ -134,7 +134,7 @@ mod v1 {
             crate::definition::Struct {
                 name: self.name.clone(),
                 row_count: self.row_count,
-                id: id,
+                id,
                 nodes: Default::default(),
             }
         }
@@ -158,8 +158,8 @@ mod v1 {
                 registry,
                 convert_pane: Box::new(move |pane, registry| match pane {
                     Pane::AddressStruct { address, r#struct } => Some(crate::Pane::AddressStruct {
-                        r#struct: Rc::downgrade(&registry.structs.get(r#struct).unwrap()),
-                        address: Rc::downgrade(&registry.addresses.get(address).unwrap()),
+                        r#struct: Rc::downgrade(registry.structs.get(r#struct).unwrap()),
+                        address: Rc::downgrade(registry.addresses.get(address).unwrap()),
                     }),
                     Pane::StructList => Some(crate::Pane::StructList),
                     Pane::AddressList => Some(crate::Pane::AddressList),
@@ -203,7 +203,7 @@ impl v1::Struct {
             nodes: from
                 .nodes
                 .iter()
-                .filter_map(|(k, v)| v1::Node::new(&*v.borrow(), registry).map(|node| (*k, node)))
+                .filter_map(|(k, v)| v1::Node::new(&v.borrow(), registry).map(|node| (*k, node)))
                 .collect(),
         }
     }
@@ -211,7 +211,7 @@ impl v1::Struct {
 
 impl v1::Address {
     pub(crate) fn new(from: &crate::Address) -> Self {
-        Self(from.0.clone(), from.1.clone())
+        Self(from.0.clone(), from.1)
     }
 }
 
@@ -222,12 +222,12 @@ impl v1::Registry {
             structs: from
                 .structs
                 .iter()
-                .map(|(k, v)| (*k, v1::Struct::new(&*v.borrow(), from)))
+                .map(|(k, v)| (*k, v1::Struct::new(&v.borrow(), from)))
                 .collect(),
             addresses: from
                 .addresses
                 .iter()
-                .map(|(k, v)| (*k, v1::Address::new(&*v.borrow())))
+                .map(|(k, v)| (*k, v1::Address::new(&v.borrow())))
                 .collect(),
         }
     }
@@ -247,7 +247,7 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
         _old_tiles: &egui_tiles::Tiles<TPaneA>,
         new_tiles: &mut egui_tiles::Tiles<TPaneB>,
     ) -> Option<egui_tiles::TileId> {
-        (self.convert_pane)(old_pane, &self.registry).map(|pane| new_tiles.insert_pane(pane))
+        (self.convert_pane)(old_pane, self.registry).map(|pane| new_tiles.insert_pane(pane))
     }
 
     fn clone_container(
@@ -266,11 +266,10 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
                     let new_tile = self.clone(*tile, old_tiles, new_tiles);
 
                     if let Some(new_tile) = new_tile {
-                        if let Some(t) = tabs.active {
-                            if t == *tile {
+                        if let Some(t) = tabs.active
+                            && t == *tile {
                                 new_active_tile = Some(new_tile);
                             }
-                        }
 
                         new_tabs.push(new_tile);
                     }
@@ -342,7 +341,7 @@ impl<'a, TPaneA, TPaneB> TreeConvert<'a, TPaneA, TPaneB> {
         let mut new_tiles = egui_tiles::Tiles::default();
 
         // TODO(emily): Should we alway even expect a root?
-        let new_root = self.clone(old_root, &old_tiles, &mut new_tiles).unwrap();
+        let new_root = self.clone(old_root, old_tiles, &mut new_tiles).unwrap();
         (new_tiles, new_root)
     }
 }
