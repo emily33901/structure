@@ -27,17 +27,17 @@ mod v1 {
     }
 
     impl Node {
-        fn make_real(&self, registry: &crate::registry::Registry) -> crate::node::Node {
+        fn make_real(&self, registry: &crate::registry::Registry) -> crate::definition::Node {
             match self {
-                Node::U8 => crate::node::Node::U8,
-                Node::U16 => crate::node::Node::U16,
-                Node::U32 => crate::node::Node::U32,
-                Node::U64 => crate::node::Node::U64,
-                Node::Struct(registry_id) => crate::node::Node::Struct(
+                Node::U8 => crate::definition::Node::U8,
+                Node::U16 => crate::definition::Node::U16,
+                Node::U32 => crate::definition::Node::U32,
+                Node::U64 => crate::definition::Node::U64,
+                Node::Struct(registry_id) => crate::definition::Node::Struct(
                     Rc::downgrade(registry.structs.get(registry_id).unwrap()),
                     RefCell::new(0.0),
                 ),
-                Node::Pointer(registry_id) => crate::node::Node::Pointer(
+                Node::Pointer(registry_id) => crate::definition::Node::Pointer(
                     Rc::downgrade(registry.structs.get(registry_id).unwrap()),
                     RefCell::new(0.0),
                 ),
@@ -130,8 +130,8 @@ mod v1 {
     }
 
     impl Struct {
-        fn make_real(&self, id: RegistryId) -> crate::Struct {
-            crate::Struct {
+        fn make_real(&self, id: RegistryId) -> crate::definition::Struct {
+            crate::definition::Struct {
                 name: self.name.clone(),
                 row_count: self.row_count,
                 id: id,
@@ -139,7 +139,11 @@ mod v1 {
             }
         }
 
-        fn populate_nodes(self, real: &mut crate::Struct, registry: &crate::registry::Registry) {
+        fn populate_nodes(
+            self,
+            real: &mut crate::definition::Struct,
+            registry: &crate::registry::Registry,
+        ) {
             real.nodes = self
                 .nodes
                 .into_iter()
@@ -175,16 +179,16 @@ mod v1 {
 }
 
 impl v1::Node {
-    fn new(value: &crate::node::Node, registry: &crate::Registry) -> Option<Self> {
+    fn new(value: &crate::definition::Node, registry: &crate::Registry) -> Option<Self> {
         match value {
-            crate::node::Node::U8 => Some(Self::U8),
-            crate::node::Node::U16 => Some(Self::U16),
-            crate::node::Node::U32 => Some(Self::U32),
-            crate::node::Node::U64 => Some(Self::U64),
-            crate::node::Node::Struct(s, _) => s
+            crate::definition::Node::U8 => Some(Self::U8),
+            crate::definition::Node::U16 => Some(Self::U16),
+            crate::definition::Node::U32 => Some(Self::U32),
+            crate::definition::Node::U64 => Some(Self::U64),
+            crate::definition::Node::Struct(s, _) => s
                 .upgrade()
                 .map(|s| Self::Struct(registry.struct_id(&s).unwrap())),
-            crate::node::Node::Pointer(s, _) => s
+            crate::definition::Node::Pointer(s, _) => s
                 .upgrade()
                 .map(|s| Self::Pointer(registry.struct_id(&s).unwrap())),
         }
@@ -192,7 +196,7 @@ impl v1::Node {
 }
 
 impl v1::Struct {
-    fn new(from: &crate::node::Struct, registry: &crate::Registry) -> Self {
+    fn new(from: &crate::definition::Struct, registry: &crate::Registry) -> Self {
         Self {
             row_count: from.row_count,
             name: from.name.clone(),

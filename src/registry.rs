@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use super::Address;
 use super::Pane;
-use crate::node::Struct;
-use crate::node::StructBuilder;
+use crate::definition::Struct;
+use crate::definition::StructBuilder;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

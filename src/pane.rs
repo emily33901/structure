@@ -1,15 +1,16 @@
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
 };
 
-use crate::Address;
-use crate::process::Process;
+use crate::process::{self, Process};
 use crate::registry::RegistryId;
+use crate::{Address, instance::StructInstance};
 use crate::{
     State,
-    node::{Struct, StructAction, StructUiFlags},
+    definition::Struct,
+    node::{StructAction, StructUiFlags},
 };
 use egui::ScrollArea;
 use egui_extras::Column;
@@ -32,23 +33,23 @@ pub enum RegistryListResponse {
 }
 
 impl Pane {
-    fn registry_list<T, FName, FValue, FResponse>(
+    fn registry_list<T>(
         ui: &mut egui::Ui,
-        registry_map: &mut HashMap<crate::registry::RegistryId, T>,
-        render_name: FName,
+        registry_list: impl for<'a> Fn(
+            &'a RefCell<State>,
+        ) -> Ref<'a, HashMap<crate::registry::RegistryId, T>>,
+        render_name: impl Fn(&mut egui::Ui, &T),
         value_width: f32,
-        render_value: FValue,
-        make_pane_response: FResponse,
+        render_value: impl Fn(&mut egui::Ui, &T),
+        make_pane_response: impl Fn(&T, &RefCell<State>) -> PaneResponse,
         headers: &[&str; 3],
-    ) -> Option<RegistryListResponse>
-    where
-        FName: Fn(&mut egui::Ui, &T),
-        FValue: Fn(&mut egui::Ui, &T),
-        FResponse: Fn(&T) -> PaneResponse,
-    {
+        state: &RefCell<State>,
+    ) -> Option<RegistryListResponse> {
         let mut response = None;
-
-        let mut keys: Vec<_> = registry_map.keys().collect();
+        let mut keys: Vec<_> = {
+            let registry_list = registry_list(state);
+            registry_list.keys().cloned().collect()
+        };
         keys.sort();
 
         let max_height = ui.available_height();
@@ -72,13 +73,14 @@ impl Pane {
             .body(|body| {
                 body.rows(20.0, keys.len(), |mut row| {
                     let index = row.index();
-                    let key = *keys[index];
+                    let key = keys[index];
 
                     let (_, r1) = row.col(|ui| {
                         ui.label(format!("{}", key.0));
                     });
 
-                    let value: &T = registry_map.get(&key).unwrap();
+                    let registry_list = registry_list(state);
+                    let value: &T = registry_list.get(&key).unwrap();
 
                     let (_, r2) = row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -104,16 +106,15 @@ impl Pane {
                     // figure out how to do that now
                     if r1.clicked() || r2.clicked() || r3.clicked() || r4.clicked() {
                         response = Some(RegistryListResponse::PaneResponse(make_pane_response(
-                            value,
+                            value, state,
                         )))
                     }
                 });
             });
-
         response
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, state: &mut State<'_>) -> Option<PaneResponse> {
+    pub fn ui(&mut self, ui: &mut egui::Ui, state: &RefCell<State>) {
         match self {
             Pane::AddressStruct {
                 r#struct: weak_struct,
@@ -121,7 +122,8 @@ impl Pane {
             } => {
                 let Some((r#struct, address)) = weak_struct.upgrade().zip(weak_address.upgrade())
                 else {
-                    return Some(PaneResponse::Close);
+                    state.borrow_mut().this_frame.response(PaneResponse::Close);
+                    return;
                 };
 
                 let address_name_id = { egui::Id::new("address-name") };
@@ -132,25 +134,11 @@ impl Pane {
                     ui.separator();
 
                     {
-                        let mut address = address.borrow_mut();
-                        let address = &mut **address;
-                        if ui
-                            .add(egui::DragValue::new(address).hexadecimal(8, false, false))
-                            .labelled_by(address_name_id)
-                            .changed()
-                        {
-                            if *address == 0 {
-                                *address = state.test as *const _ as usize;
-                            }
-                        }
-                    }
-
-                    {
                         let name = { address.borrow().name().to_owned() };
                         egui::ComboBox::new("address-combo-box", "")
                             .selected_text(name)
                             .show_ui(ui, |ui| {
-                                for (id, other_address) in &state.registry.addresses {
+                                for (id, other_address) in &state.borrow().registry.addresses {
                                     if ui
                                         .button(format!("{} ({id})", other_address.borrow().name()))
                                         .clicked()
@@ -162,8 +150,9 @@ impl Pane {
                                 ui.separator();
 
                                 if ui.button("New address").clicked() {
-                                    *weak_address =
-                                        Rc::downgrade(&state.registry.default_address());
+                                    *weak_address = Rc::downgrade(
+                                        &state.borrow_mut().registry.default_address(),
+                                    );
                                 }
                             });
                     }
@@ -173,31 +162,12 @@ impl Pane {
 
                 ui.heading("Struct");
 
-                ScrollArea::horizontal()
-                    .show(ui, |ui| {
-                        let mut response = None;
+                ScrollArea::horizontal().show(ui, |ui| {
+                    let struct_instance = StructInstance::new(r#struct, **address.borrow());
 
-                        let r = r#struct.borrow().heading(
-                            r#struct.clone(),
-                            ui,
-                            **address.borrow(),
-                            state,
-                        );
-
-                        response = response.or(r);
-
-                        let (_bytes, r) = r#struct.borrow().ui(
-                            r#struct.clone(),
-                            StructUiFlags { top_level: true },
-                            ui,
-                            **address.borrow(),
-                            state,
-                        );
-
-                        response = response.or(r);
-                        response.map(|br| PaneResponse::AddressStructResponse(br))
-                    })
-                    .inner
+                    struct_instance.heading(ui, state);
+                    struct_instance.ui(StructUiFlags { top_level: true }, ui, state);
+                });
             }
             Pane::AddressList => {
                 ui.heading("Addresses");
@@ -206,7 +176,7 @@ impl Pane {
 
                 match Pane::registry_list(
                     ui,
-                    &mut state.registry.addresses,
+                    |state| Ref::map(state.borrow(), |state| &state.registry.addresses),
                     |ui, address| {
                         ui.text_edit_singleline(&mut address.borrow_mut().0);
                     },
@@ -217,15 +187,17 @@ impl Pane {
                             ui.label(format!("{:016X}", **address.borrow()));
                         });
                     },
-                    |address| PaneResponse::OpenAddress(address.clone()),
+                    |address, state| PaneResponse::OpenAddress(address.clone()),
                     &["id", "address", "name"],
+                    state,
                 ) {
                     Some(RegistryListResponse::Remove(id)) => {
-                        state.registry.addresses.remove(&id);
-                        None
+                        state.borrow_mut().registry.addresses.remove(&id);
                     }
-                    Some(RegistryListResponse::PaneResponse(pane_response)) => Some(pane_response),
-                    None => None,
+                    Some(RegistryListResponse::PaneResponse(pane_response)) => {
+                        state.borrow_mut().this_frame.response(pane_response)
+                    }
+                    None => {}
                 }
             }
             Pane::StructList => {
@@ -235,7 +207,7 @@ impl Pane {
 
                 match Pane::registry_list(
                     ui,
-                    &mut state.registry.structs,
+                    |state| Ref::map(state.borrow(), |state| &state.registry.structs),
                     |ui, s| {
                         ui.text_edit_singleline(&mut s.borrow_mut().name);
                     },
@@ -243,15 +215,17 @@ impl Pane {
                     |ui, s| {
                         ui.label(format!("{}", s.borrow().byte_size()));
                     },
-                    |s| PaneResponse::OpenStruct(s.clone()),
+                    |s, _state| PaneResponse::OpenStruct(s.clone()),
                     &["id", "size", "name"],
+                    state,
                 ) {
                     Some(RegistryListResponse::Remove(id)) => {
-                        state.registry.structs.remove(&id);
-                        None
+                        state.borrow_mut().registry.structs.remove(&id);
                     }
-                    Some(RegistryListResponse::PaneResponse(response)) => Some(response),
-                    _ => None,
+                    Some(RegistryListResponse::PaneResponse(response)) => {
+                        state.borrow_mut().this_frame.response(response)
+                    }
+                    _ => {}
                 }
             }
             Pane::ProcessList { matching } => {
@@ -269,6 +243,7 @@ impl Pane {
                 ui.separator();
 
                 let processes: Vec<_> = state
+                    .borrow()
                     .processes
                     .into_iter()
                     .filter(|p| p.name.contains(matching.as_str()))
@@ -290,7 +265,7 @@ impl Pane {
                         body.rows(15.0, processes.len(), |mut row| {
                             let process = processes[row.index()];
 
-                            if let Some(active_process) = state.process {
+                            if let Some(active_process) = state.borrow().process {
                                 row.set_selected(active_process.pid == process.pid);
                             }
 
@@ -317,8 +292,12 @@ impl Pane {
                         });
                     });
 
-                process_selected
-                    .map(|new_process| PaneResponse::ProcessSelected(new_process.clone()))
+                if let Some(new_process) = process_selected {
+                    state
+                        .borrow_mut()
+                        .this_frame
+                        .response(PaneResponse::ProcessSelected(new_process.clone()));
+                }
             }
         }
     }
@@ -363,4 +342,16 @@ pub enum AddChild {
     AddressList,
     StructList,
     ProcessList,
+}
+
+impl Into<PaneResponse> for AddressResponse {
+    fn into(self) -> PaneResponse {
+        PaneResponse::AddressStructResponse(self)
+    }
+}
+
+impl Into<PaneResponse> for StructAction {
+    fn into(self) -> PaneResponse {
+        PaneResponse::AddressStructResponse(AddressResponse::Action(self))
+    }
 }

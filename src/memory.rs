@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use std::{cell::RefCell, mem::MaybeUninit};
 
 use anyhow::Result;
 use egui::{Color32, RichText, ahash::HashMap};
@@ -70,7 +70,7 @@ pub(crate) fn rtti_if_address_is_vtable<'a>(
 }
 
 pub(crate) fn disect_bytes(
-    state: &mut State,
+    state: &RefCell<State>,
     bytes: &[u8],
     ui: &mut egui::Ui,
 ) -> Option<AddressResponse> {
@@ -86,7 +86,7 @@ pub(crate) fn disect_bytes(
             return;
         }
 
-        let Some(section) = section_for_address(state.sections, value) else {
+        let Some(section) = section_for_address(state.borrow().sections, value) else {
             return;
         };
 
@@ -112,21 +112,26 @@ pub(crate) fn disect_bytes(
         );
 
         if r.hovered() {
-            state.new_highlighted_address = Some(value);
+            state.borrow_mut().this_frame.highlighted_address = Some(value);
         }
 
         if r.clicked() {
             response = Some(AddressResponse::AddressStruct(
-                Some(state.registry.find_or_register_address(value.into())),
+                Some(
+                    state
+                        .borrow_mut()
+                        .registry
+                        .find_or_register_address(value.into()),
+                ),
                 None,
             ));
         }
 
-        if let Some(rtti) = rtti_if_address_is_vtable(state, value) {
+        if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), value) {
             ui.label(rtti.names.join(" : "));
         } else {
-            let address = state.memory.read(value);
-            if let Some(rtti) = rtti_if_address_is_vtable(state, address) {
+            let address = state.borrow_mut().memory.read(value);
+            if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
                 ui.label(format!("-> {}", rtti.names.join(" : ")));
             }
         }
@@ -136,13 +141,13 @@ pub(crate) fn disect_bytes(
 }
 
 pub(crate) fn highlightable_address_text(
-    state: &mut State,
+    state: &RefCell<State>,
     address: usize,
     text: impl Into<String>,
 ) -> egui::RichText {
     let mut text = RichText::new(text);
 
-    if let Some(highlighted_address) = state.highlighted_address
+    if let Some(highlighted_address) = state.borrow().last_frame.highlighted_address
         && highlighted_address == address
     {
         eprintln!("address highlighted");

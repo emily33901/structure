@@ -8,7 +8,7 @@ use egui::{ScrollArea, Theme, vec2};
 use egui_extras::Column;
 use egui_tiles::{Tile, TileId, Tiles};
 use memory::Memory;
-use node::{Struct, StructAction, StructUiFlags};
+use node::{StructAction, StructUiFlags};
 use pe::{Module, Section};
 use process::{OpenProcess, Process};
 use project::{Layout, Project};
@@ -17,6 +17,8 @@ use rtti::RttiCache;
 
 use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse};
 
+pub mod definition;
+pub mod instance;
 mod memory;
 mod node;
 pub mod pane;
@@ -26,6 +28,7 @@ mod project;
 mod registry;
 mod rtti;
 mod storage;
+pub mod ui;
 
 #[derive(Debug)]
 struct Address(String, usize);
@@ -107,8 +110,7 @@ impl Default for TreeBehaviorOptions {
 
 struct TreeBehavior<'a> {
     options: &'a mut TreeBehaviorOptions,
-
-    state: State<'a>,
+    state: &'a RefCell<State<'a>>,
 }
 
 const PANE_INNER_PAD: f32 = 4.0;
@@ -120,6 +122,8 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
         tile_id: egui_tiles::TileId,
         pane: &mut Pane,
     ) -> egui_tiles::UiResponse {
+        self.state.borrow_mut().this_frame.current_tile_id = Some(tile_id);
+
         ui.allocate_ui_with_layout(
             vec2(ui.available_width() - PANE_INNER_PAD, ui.available_height()),
             egui::Layout::left_to_right(egui::Align::Min),
@@ -133,9 +137,7 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
                         ui.add_space(PANE_INNER_PAD);
 
                         ui.push_id(tile_id, |ui| {
-                            if let Some(pane_response) = pane.ui(ui, &mut self.state) {
-                                self.options.pane_response = Some((tile_id, pane_response))
-                            }
+                            pane.ui(ui, &mut self.state);
                         });
                     },
                 );
@@ -231,6 +233,24 @@ impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
     }
 }
 
+#[derive(Default)]
+pub struct FrameState {
+    // TODO(emily): This is hacky
+    current_tile_id: Option<TileId>,
+    highlighted_address: Option<usize>,
+    response: Option<(TileId, PaneResponse)>,
+}
+
+impl FrameState {
+    fn response(&mut self, new_response: impl Into<PaneResponse>) {
+        let tile_id = self
+            .current_tile_id
+            .expect("trying to set a response but not rendering a pane?");
+
+        self.response = Some((tile_id, new_response.into()))
+    }
+}
+
 pub struct State<'a> {
     registry: &'a mut Registry,
     memory: &'a mut Memory<'a>,
@@ -239,8 +259,10 @@ pub struct State<'a> {
     rtti: &'a mut RttiCache,
     processes: &'a [Process],
     process: Option<&'a Process>,
-    highlighted_address: Option<usize>,
-    new_highlighted_address: Option<usize>,
+
+    this_frame: FrameState,
+    last_frame: &'a FrameState,
+
     test: &'a Test,
 }
 
@@ -254,11 +276,11 @@ struct App {
     rtti: RttiCache,
     processes: Vec<Process>,
 
-    highlighted_address: Option<usize>,
-
     test: Box<Test>,
 
     tree_options: TreeBehaviorOptions,
+
+    this_frame: FrameState,
 }
 
 impl Default for App {
@@ -278,7 +300,7 @@ impl Default for App {
             tree_options: Default::default(),
             processes: Default::default(),
             rtti: Default::default(),
-            highlighted_address: Default::default()
+            this_frame: Default::default(),
         }
     }
 }
@@ -286,6 +308,8 @@ impl Default for App {
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         cc.egui_ctx.set_theme(Theme::Dark);
+
+        // cc.egui_ctx.set_debug_on_hover(true);
 
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -380,9 +404,8 @@ impl eframe::App for App {
                 ui.heading("No process selected");
             }
 
-            let mut behavior = TreeBehavior {
-                options: &mut self.tree_options,
-                state: State {
+            let state = RefCell::new(
+                State {
                     registry: &mut self.project.registry,
                     memory: &mut memory,
                     sections: self.sections.as_deref().unwrap_or(&[]),
@@ -391,75 +414,81 @@ impl eframe::App for App {
                     processes: self.processes.as_slice(),
                     process: self.process.as_ref(),
                     test: &self.test,
-                    highlighted_address: self.highlighted_address,
-                    new_highlighted_address: None
-                },
+                    last_frame: &self.this_frame,
+                    this_frame: Default::default(),
+                }
+            );
+
+            let mut behavior = TreeBehavior {
+                options: &mut self.tree_options,
+                state: &state,
             };
 
             let layout = &mut self.project.layout;
 
             layout.tree.ui(&mut behavior, ui);
 
-            self.highlighted_address = behavior.state.new_highlighted_address;
+            // TODO(emily): You should be able to take this_frame here please.
 
-            if let Some((from, pane_response)) = behavior.options.pane_response.take() {
-                match pane_response {
-                    // TODO(emily): We should probably check whether this address is already somewhere
-                    // and then open that?
-                    PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
-                        address,
-                        s,
-                    )) => {
-                        layout.add_child(
-                            &mut self.project.registry,
-                            from,
-                            AddChild::AddressStruct(s, address),
-                        );
-                    }
-                    PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
-                        let egui_tiles::Tile::Pane(pane) =
-                            self.project.layout.tree.tiles.get_mut(from).unwrap()
-                        else {
-                            panic!("Only expect AddressStructResponse(AddressResponse::Replace) to come from a Pane")
-                        };
+            let Some((from, response)) = state.borrow_mut().this_frame.response.take() else {
+                return;
+            };
 
-                        let Pane::AddressStruct {
-                            r#struct: s,
-                            address: _address,
-                        } = pane
-                        else {
-                            panic!();
-                        };
-
-                        *s = Rc::downgrade(&new_s);
-                    }
-                    PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
-                        action.call(&mut behavior.state);
-                    }
-                    PaneResponse::OpenAddress(address) => {
-                        layout.add_child(
-                            &mut self.project.registry,
-                            from,
-                            AddChild::AddressStruct(None, Some(address)),
-                        );
-                    }
-                    PaneResponse::OpenStruct(s) => layout.add_child(
+            match response {
+                // TODO(emily): We should probably check whether this address is already somewhere
+                // and then open that?
+                PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
+                    address,
+                    s,
+                )) => {
+                    layout.add_child(
                         &mut self.project.registry,
                         from,
-                        AddChild::AddressStruct(Some(s), None),
-                    ),
-                    PaneResponse::ProcessSelected(new_process) => {
-                        self.process_changed(new_process);
-                    }
-                    PaneResponse::AddChild(child) => {
-                        layout.add_child(&mut self.project.registry, from, child)
-                    }
-                    PaneResponse::Close => {
-                        eprintln!("Ignoring close");
-                    }
+                        AddChild::AddressStruct(s, address),
+                    );
+                }
+                PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
+                    let egui_tiles::Tile::Pane(pane) =
+                        self.project.layout.tree.tiles.get_mut(from).unwrap()
+                    else {
+                        panic!("Only expect AddressStructResponse(AddressResponse::Replace) to come from a Pane")
+                    };
+
+                    let Pane::AddressStruct {
+                        r#struct: s,
+                        address: _address,
+                    } = pane
+                    else {
+                        panic!();
+                    };
+
+                    *s = Rc::downgrade(&new_s);
+                }
+                PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
+                    action.call(&state);
+                }
+                PaneResponse::OpenAddress(address) => {
+                    layout.add_child(
+                        &mut self.project.registry,
+                        from,
+                        AddChild::AddressStruct(None, Some(address)),
+                    );
+                }
+                PaneResponse::OpenStruct(s) => layout.add_child(
+                    &mut self.project.registry,
+                    from,
+                    AddChild::AddressStruct(Some(s), None),
+                ),
+                PaneResponse::ProcessSelected(new_process) => {
+                    self.process_changed(new_process);
+                }
+                PaneResponse::AddChild(child) => {
+                    layout.add_child(&mut self.project.registry, from, child)
+                }
+                PaneResponse::Close => {
+                    eprintln!("Ignoring close");
                 }
             }
-            
         });
     }
 }
