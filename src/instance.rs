@@ -59,11 +59,11 @@ impl<'a> NodeInstance<'a> {
 
     fn struct_instance(&self, state: &RefCell<State>) -> Option<StructInstance> {
         let (definition, address) = match &*self.definition.borrow() {
-            Node::Pointer(p, _) => {
+            Node::Pointer(p) => {
                 let p = p.upgrade().unwrap();
                 Some((p, state.borrow_mut().memory.read(self.address)))
             }
-            Node::Struct(p, _) => {
+            Node::Struct(p) => {
                 let p = p.upgrade().unwrap();
                 Some((p, self.address))
             }
@@ -402,19 +402,13 @@ impl<'a> NodeInstance<'a> {
         (|| {
             if ui.button("Pointer").clicked() {
                 return Some((
-                    Node::Pointer(
-                        Rc::downgrade(&state.borrow_mut().registry.default_struct()),
-                        RefCell::new(0.0),
-                    ),
+                    Node::Pointer(Rc::downgrade(&state.borrow_mut().registry.default_struct())),
                     row_index,
                 ));
             }
             if ui.button("Struct").clicked() {
                 return Some((
-                    Node::Struct(
-                        Rc::downgrade(&state.borrow_mut().registry.default_struct()),
-                        RefCell::new(0.0),
-                    ),
+                    Node::Struct(Rc::downgrade(&state.borrow_mut().registry.default_struct())),
                     row_index,
                 ));
             }

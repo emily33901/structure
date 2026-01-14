@@ -33,14 +33,12 @@ mod v1 {
                 Node::U16 => crate::definition::Node::U16,
                 Node::U32 => crate::definition::Node::U32,
                 Node::U64 => crate::definition::Node::U64,
-                Node::Struct(registry_id) => crate::definition::Node::Struct(
-                    Rc::downgrade(registry.structs.get(registry_id).unwrap()),
-                    RefCell::new(0.0),
-                ),
-                Node::Pointer(registry_id) => crate::definition::Node::Pointer(
-                    Rc::downgrade(registry.structs.get(registry_id).unwrap()),
-                    RefCell::new(0.0),
-                ),
+                Node::Struct(registry_id) => crate::definition::Node::Struct(Rc::downgrade(
+                    registry.structs.get(registry_id).unwrap(),
+                )),
+                Node::Pointer(registry_id) => crate::definition::Node::Pointer(Rc::downgrade(
+                    registry.structs.get(registry_id).unwrap(),
+                )),
             }
         }
     }
@@ -185,10 +183,10 @@ impl v1::Node {
             crate::definition::Node::U16 => Some(Self::U16),
             crate::definition::Node::U32 => Some(Self::U32),
             crate::definition::Node::U64 => Some(Self::U64),
-            crate::definition::Node::Struct(s, _) => s
+            crate::definition::Node::Struct(s) => s
                 .upgrade()
                 .map(|s| Self::Struct(registry.struct_id(&s).unwrap())),
-            crate::definition::Node::Pointer(s, _) => s
+            crate::definition::Node::Pointer(s) => s
                 .upgrade()
                 .map(|s| Self::Pointer(registry.struct_id(&s).unwrap())),
         }

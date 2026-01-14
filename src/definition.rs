@@ -11,8 +11,8 @@ pub enum Node {
     U16,
     U32,
     U64,
-    Struct(Weak<RefCell<Struct>>, RefCell<f32>),
-    Pointer(Weak<RefCell<Struct>>, RefCell<f32>),
+    Struct(Weak<RefCell<Struct>>),
+    Pointer(Weak<RefCell<Struct>>),
 }
 
 #[derive(Debug)]
@@ -69,7 +69,7 @@ impl Node {
     pub fn row_count(&self) -> usize {
         match self {
             Self::U64 | Self::U32 | Self::U16 | Self::U8 => 1,
-            Self::Pointer(s, _) | Self::Struct(s, _) => {
+            Self::Pointer(s) | Self::Struct(s) => {
                 s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1)
             }
         }
@@ -81,8 +81,8 @@ impl Node {
             Self::U32 => 4,
             Self::U16 => 2,
             Self::U8 => 1,
-            Self::Pointer(_, _) => 8,
-            Self::Struct(s, _) => s
+            Self::Pointer(_) => 8,
+            Self::Struct(s) => s
                 .upgrade()
                 .map(|s| {
                     let size = s.borrow().byte_size();
