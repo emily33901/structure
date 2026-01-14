@@ -1,5 +1,6 @@
 use std::{
     cell::{Ref, RefCell},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 
@@ -16,18 +17,42 @@ use crate::{
     ui::{self, NODE_UNIT_ROW_HEIGHT},
 };
 
+#[derive(Hash)]
+pub struct Location(u64);
+
+impl Location {
+    pub fn new(instance_id: RegistryId) -> Self {
+        Self(instance_id.0 as u64)
+    }
+
+    pub fn progress(&self, offset_in_parent: usize) -> Self {
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.hash(&mut hasher);
+        offset_in_parent.hash(&mut hasher);
+
+        Self(hasher.finish())
+    }
+}
+
 pub struct NodeInstance<'a> {
     address: usize,
     offset_in_parent: usize,
+    location: Location,
 
     definition: Ref<'a, RefCell<Node>>,
 }
 
 impl<'a> NodeInstance<'a> {
-    fn new(address: usize, offset_in_parent: usize, definition: Ref<'a, RefCell<Node>>) -> Self {
+    fn new(
+        address: usize,
+        offset_in_parent: usize,
+        location: Location,
+        definition: Ref<'a, RefCell<Node>>,
+    ) -> Self {
         Self {
             address,
             offset_in_parent,
+            location,
             definition,
         }
     }
@@ -45,26 +70,44 @@ impl<'a> NodeInstance<'a> {
             _ => None,
         }?;
 
-        Some(StructInstance::new(definition, address))
+        Some(StructInstance::new(
+            definition,
+            address,
+            self.location.progress(self.offset_in_parent),
+            self.offset_in_parent,
+        ))
     }
 }
 
 pub struct StructInstance {
     address: usize,
+    offset_in_parent: usize,
+    location: Location,
     definition: Rc<RefCell<Struct>>,
 }
 
 impl StructInstance {
-    pub fn new(definition: Rc<RefCell<Struct>>, address: usize) -> Self {
+    pub fn new(
+        definition: Rc<RefCell<Struct>>,
+        address: usize,
+        location: Location,
+        offset_in_parent: usize,
+    ) -> Self {
         Self {
             definition,
+            offset_in_parent,
+            location,
             address,
         }
     }
 
+    fn ui_id(&self) -> egui::Id {
+        egui::Id::new(&self.location)
+    }
+
     fn collapsing(&self, ctx: &egui::Context) -> CollapsingState {
-        let eid = egui::Id::new(self.address);
-        CollapsingState::load_with_default_open(ctx, eid, true)
+        let eid = self.ui_id();
+        CollapsingState::load_with_default_open(ctx, eid, false)
     }
 }
 
@@ -137,7 +180,7 @@ impl<'a> NodeInstance<'a> {
                     .selectable(true);
 
                     if ui.add(label).hovered() {
-                        state.borrow_mut().this_frame.highlighted_address = Some(address);
+                        state.borrow_mut().this_frame_mut().highlighted_address = Some(address);
                     }
                 });
             });
@@ -280,13 +323,10 @@ impl<'a> NodeInstance<'a> {
                 .registry
                 .find_or_register_address(self.address.into());
 
-            state
-                .borrow_mut()
-                .this_frame
-                .response(AddressResponse::AddressStruct(
-                    Some(address),
-                    Some(struct_instance.definition),
-                ))
+            state.borrow_mut().response(AddressResponse::AddressStruct(
+                Some(address),
+                Some(struct_instance.definition),
+            ))
         }
     }
 
@@ -341,7 +381,7 @@ impl<'a> NodeInstance<'a> {
                 strip.cell(|ui| {
                     let bytes = &buffer;
                     if let Some(r) = memory::disect_bytes(state, bytes, ui) {
-                        state.borrow_mut().this_frame.response(r);
+                        state.borrow_mut().response(r);
                     }
                 });
             });
@@ -417,7 +457,12 @@ impl StructInstance {
         let definition = self.definition.borrow();
         let node_definition =
             Ref::filter_map(definition, |definition| definition.nodes.get(&row)).ok()?;
-        Some(NodeInstance::new(address, offset, node_definition))
+        Some(NodeInstance::new(
+            address,
+            offset,
+            self.location.progress(offset),
+            node_definition,
+        ))
     }
 
     fn row_count(&self) -> usize {
@@ -462,9 +507,8 @@ impl StructInstance {
             |ui| {
                 let self_name = self.name();
                 let self_id = self.id();
-                let combo_box_id = (self.id(), self.address, &*self_name);
 
-                egui::ComboBox::new(combo_box_id, "")
+                egui::ComboBox::new((self.ui_id(), "struct-replace-combo-box"), "")
                     .selected_text(&*self_name)
                     .show_ui(ui, |ui| {
                         let mut state = state.borrow_mut();
@@ -477,9 +521,7 @@ impl StructInstance {
                                 )
                                 .clicked()
                             {
-                                state
-                                    .this_frame
-                                    .response(AddressResponse::Replace(other_struct.clone()))
+                                state.response(AddressResponse::Replace(other_struct.clone()))
                             }
                         }
 
@@ -487,9 +529,7 @@ impl StructInstance {
 
                         if ui.button("New struct".to_string()).clicked() {
                             let default_struct = state.registry.default_struct();
-                            state
-                                .this_frame
-                                .response(AddressResponse::Replace(default_struct));
+                            state.response(AddressResponse::Replace(default_struct));
                         }
                     });
 
@@ -500,7 +540,7 @@ impl StructInstance {
                     .changed()
                 {
                     // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
-                    state.borrow_mut().this_frame.response(StructAction::new({
+                    state.borrow_mut().response(StructAction::new({
                         let definition = self.definition.clone();
                         move |_| {
                             definition.borrow_mut().row_count = row_count;
@@ -576,19 +616,6 @@ impl StructInstance {
 
                             let bytes = node.byte_size();
 
-                            // Handle replacing Struct with a different Struct
-                            // let response = match response {
-                            //     Some(AddressResponse::Replace(new_s)) => {
-                            //         let (Node::Struct(s, _) | Node::Pointer(s, _)) = &mut *node.borrow_mut() else {
-                            //             panic!("AddressResponse::Replace should only come from a Node::Struct or a Node::Pointer");
-                            //         };
-
-                            //         *s = Rc::downgrade(&new_s);
-                            //         None
-                            //     }
-                            //     r => r,
-                            // };
-
                             // Accumulate bytes for the total size of this struct
                             size += bytes;
                         });
@@ -597,17 +624,15 @@ impl StructInstance {
                             let address = self.address + offset;
 
                             if ui.button("Open address in new window").clicked() {
-                                state.borrow_mut().this_frame.response(
-                                    AddressResponse::AddressStruct(
-                                        Some(
-                                            state
-                                                .borrow_mut()
-                                                .registry
-                                                .find_or_register_address(Address::from(address)),
-                                        ),
-                                        None,
+                                state.borrow_mut().response(AddressResponse::AddressStruct(
+                                    Some(
+                                        state
+                                            .borrow_mut()
+                                            .registry
+                                            .find_or_register_address(Address::from(address)),
                                     ),
-                                )
+                                    None,
+                                ))
                             }
 
                             if let Some(node) = self.node(index, address, offset) {
@@ -622,7 +647,7 @@ impl StructInstance {
                 });
 
             if let Some(action) = action {
-                state.borrow_mut().this_frame.response(StructAction::new({
+                state.borrow_mut().response(StructAction::new({
                     let definition = self.definition.clone();
                     move |_registry| {
                         let mut definition = definition.borrow_mut();

@@ -4,7 +4,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::process::Process;
 use crate::registry::RegistryId;
 use crate::{Address, instance::StructInstance};
 use crate::{
@@ -12,6 +11,7 @@ use crate::{
     definition::Struct,
     node::{StructAction, StructUiFlags},
 };
+use crate::{instance::Location, process::Process};
 use egui::ScrollArea;
 use egui_extras::Column;
 
@@ -122,16 +122,21 @@ impl Pane {
             } => {
                 let Some((r#struct, address)) = weak_struct.upgrade().zip(weak_address.upgrade())
                 else {
-                    state.borrow_mut().this_frame.response(PaneResponse::Close);
+                    state.borrow_mut().response(PaneResponse::Close);
                     return;
                 };
-
-                let _address_name_id = { egui::Id::new("address-name") };
 
                 ui.horizontal(|ui| {
                     ui.heading("Address");
 
                     ui.separator();
+
+                    {
+                        let mut address = address.borrow_mut();
+                        let address = &mut **address;
+                        ui.add(egui::DragValue::new(address).hexadecimal(8, false, false))
+                            .labelled_by(egui::Id::new("address-name"));
+                    }
 
                     {
                         let name = { address.borrow().name().to_owned() };
@@ -163,7 +168,12 @@ impl Pane {
                 ui.heading("Struct");
 
                 ScrollArea::horizontal().show(ui, |ui| {
-                    let struct_instance = StructInstance::new(r#struct, **address.borrow());
+                    let struct_instance = StructInstance::new(
+                        r#struct,
+                        **address.borrow(),
+                        Location::new(state.borrow().registry.address_id(&address).unwrap()),
+                        0,
+                    );
 
                     struct_instance.heading(ui, state);
                     struct_instance.ui(StructUiFlags { top_level: true }, ui, state);
@@ -195,7 +205,7 @@ impl Pane {
                         state.borrow_mut().registry.addresses.remove(&id);
                     }
                     Some(RegistryListResponse::PaneResponse(pane_response)) => {
-                        state.borrow_mut().this_frame.response(pane_response)
+                        state.borrow_mut().response(pane_response)
                     }
                     None => {}
                 }
@@ -223,7 +233,7 @@ impl Pane {
                         state.borrow_mut().registry.structs.remove(&id);
                     }
                     Some(RegistryListResponse::PaneResponse(response)) => {
-                        state.borrow_mut().this_frame.response(response)
+                        state.borrow_mut().response(response)
                     }
                     _ => {}
                 }
@@ -295,7 +305,6 @@ impl Pane {
                 if let Some(new_process) = process_selected {
                     state
                         .borrow_mut()
-                        .this_frame
                         .response(PaneResponse::ProcessSelected(new_process.clone()));
                 }
             }

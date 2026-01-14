@@ -6,7 +6,7 @@ use egui::ahash::HashMap;
 use crate::registry::RegistryId;
 
 #[derive(Debug)]
-pub(crate) enum Node {
+pub enum Node {
     U8,
     U16,
     U32,
@@ -16,7 +16,7 @@ pub(crate) enum Node {
 }
 
 #[derive(Debug)]
-pub(crate) struct Struct {
+pub struct Struct {
     pub(crate) row_count: usize,
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
@@ -24,7 +24,7 @@ pub(crate) struct Struct {
     pub(crate) id: RegistryId,
 }
 
-pub(crate) struct StructBuilder {
+pub struct StructBuilder {
     pub(crate) row_count: usize,
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,

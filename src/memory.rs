@@ -108,7 +108,7 @@ pub(crate) fn disect_bytes(
         );
 
         if r.hovered() {
-            state.borrow_mut().this_frame.highlighted_address = Some(value);
+            state.borrow_mut().this_frame_mut().highlighted_address = Some(value);
         }
 
         if r.clicked() {

@@ -25,7 +25,7 @@ mod storage;
 pub mod ui;
 
 #[derive(Debug)]
-struct Address(String, usize);
+pub struct Address(String, usize);
 
 impl Default for Address {
     fn default() -> Self {
@@ -102,21 +102,21 @@ impl Default for TreeBehaviorOptions {
     }
 }
 
-struct TreeBehavior<'a> {
+struct TreeBehavior<'a, 'b> {
     options: &'a mut TreeBehaviorOptions,
-    state: &'a RefCell<State<'a>>,
+    state: &'a RefCell<State<'b>>,
 }
 
 const PANE_INNER_PAD: f32 = 4.0;
 
-impl<'a> egui_tiles::Behavior<Pane> for TreeBehavior<'a> {
+impl<'a, 'b> egui_tiles::Behavior<Pane> for TreeBehavior<'a, 'b> {
     fn pane_ui(
         &mut self,
         ui: &mut egui::Ui,
         tile_id: egui_tiles::TileId,
         pane: &mut Pane,
     ) -> egui_tiles::UiResponse {
-        self.state.borrow_mut().this_frame.current_tile_id = Some(tile_id);
+        self.state.borrow_mut().this_frame_mut().current_tile_id = Some(tile_id);
 
         ui.allocate_ui_with_layout(
             vec2(ui.available_width() - PANE_INNER_PAD, ui.available_height()),
@@ -254,10 +254,24 @@ pub struct State<'a> {
     processes: &'a [Process],
     process: Option<&'a Process>,
 
-    this_frame: FrameState,
+    this_frame: Option<FrameState>,
     last_frame: &'a FrameState,
 
     test: &'a Test,
+}
+
+impl<'a> State<'a> {
+    fn this_frame_mut(&mut self) -> &mut FrameState {
+        self.this_frame.as_mut().unwrap()
+    }
+
+    fn response(&mut self, new_response: impl Into<PaneResponse>) {
+        self.this_frame_mut().response(new_response);
+    }
+
+    fn take_this_frame(&mut self) -> FrameState {
+        self.this_frame.take().unwrap()
+    }
 }
 
 struct App {
@@ -346,6 +360,56 @@ impl App {
             }
         };
     }
+
+    fn handle_response(
+        state: &RefCell<State>,
+        layout: &mut Layout,
+        this_frame: &mut FrameState,
+        unhandled_response: &mut Option<(TileId, PaneResponse)>,
+    ) {
+        if let Some((from, response)) = this_frame.response.take() {
+            match response {
+                // TODO(emily): We should probably check whether this address is already somewhere
+                // and then open that?
+                PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(address, s)) => {
+                    layout.add_child(
+                        state.borrow_mut().registry,
+                        from,
+                        AddChild::AddressStruct(s, address),
+                    );
+                }
+                PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
+                    *unhandled_response = Some((from, PaneResponse::AddressStructResponse(
+                        AddressResponse::Replace(new_s),
+                    )));
+                }
+                PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
+                    action.call(state);
+                }
+                PaneResponse::OpenAddress(address) => {
+                    layout.add_child(
+                        state.borrow_mut().registry,
+                        from,
+                        AddChild::AddressStruct(None, Some(address)),
+                    );
+                }
+                PaneResponse::OpenStruct(s) => layout.add_child(
+                    state.borrow_mut().registry,
+                    from,
+                    AddChild::AddressStruct(Some(s), None),
+                ),
+                PaneResponse::ProcessSelected(new_process) => {
+                    *unhandled_response = Some((from, PaneResponse::ProcessSelected(new_process)))
+                }
+                PaneResponse::AddChild(child) => {
+                    layout.add_child(state.borrow_mut().registry, from, child)
+                }
+                PaneResponse::Close => {
+                    eprintln!("Ignoring close");
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -383,7 +447,8 @@ impl eframe::App for App {
                     self.modules = pe::modules(&mut memory).ok();
                     self.sections = pe::sections(&mut memory).ok();
 
-                    if let Some((modules, sections)) = self.modules.as_ref().zip(self.sections.as_mut())
+                    if let Some((modules, sections)) =
+                        self.modules.as_ref().zip(self.sections.as_mut())
                     {
                         pe::module_sections(&mut memory, modules, sections).unwrap();
                     }
@@ -398,20 +463,19 @@ impl eframe::App for App {
                 ui.heading("No process selected");
             }
 
-            let state = RefCell::new(
-                State {
-                    registry: &mut self.project.registry,
-                    memory: &mut memory,
-                    sections: self.sections.as_deref().unwrap_or(&[]),
-                    modules: self.modules.as_deref().unwrap_or(&[]),
-                    rtti: &mut self.rtti,
-                    processes: self.processes.as_slice(),
-                    process: self.process.as_ref(),
-                    test: &self.test,
-                    last_frame: &self.this_frame,
-                    this_frame: Default::default(),
-                }
-            );
+            let state = RefCell::new(State {
+                registry: &mut self.project.registry,
+                memory: &mut memory,
+                sections: self.sections.as_deref().unwrap_or(&[]),
+                modules: self.modules.as_deref().unwrap_or(&[]),
+                rtti: &mut self.rtti,
+                processes: self.processes.as_slice(),
+                process: self.process.as_ref(),
+
+                test: &self.test,
+                last_frame: &self.this_frame,
+                this_frame: Some(Default::default()),
+            });
 
             let mut behavior = TreeBehavior {
                 options: &mut self.tree_options,
@@ -422,30 +486,28 @@ impl eframe::App for App {
 
             layout.tree.ui(&mut behavior, ui);
 
-            // TODO(emily): You should be able to take this_frame here please.
+            drop(behavior);
 
-            let Some((from, response)) = state.borrow_mut().this_frame.response.take() else {
-                return;
-            };
+            let mut this_frame = state.borrow_mut().take_this_frame();
 
-            match response {
-                // TODO(emily): We should probably check whether this address is already somewhere
-                // and then open that?
-                PaneResponse::AddressStructResponse(AddressResponse::AddressStruct(
-                    address,
-                    s,
-                )) => {
-                    layout.add_child(
-                        &mut self.project.registry,
-                        from,
-                        AddChild::AddressStruct(s, address),
-                    );
-                }
-                PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
+            // TODO(emily): Hacky but in order to update our process we need to drop state
+            // so that we have access to &mut self again. Screams of bad design.
+            let mut unhandled_response = None;
+            Self::handle_response(&state, layout, &mut this_frame, &mut unhandled_response);
+
+            drop(state);
+
+            match unhandled_response {
+                Some((_from, PaneResponse::ProcessSelected(new_process))) => {
+                    self.process_changed(new_process);
+                } 
+                Some((from, PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)))) => {
                     let egui_tiles::Tile::Pane(pane) =
                         self.project.layout.tree.tiles.get_mut(from).unwrap()
                     else {
-                        panic!("Only expect AddressStructResponse(AddressResponse::Replace) to come from a Pane")
+                        panic!(
+                            "Only expect AddressStructResponse(AddressResponse::Replace) to come from a Pane"
+                        )
                     };
 
                     let Pane::AddressStruct {
@@ -458,31 +520,11 @@ impl eframe::App for App {
 
                     *s = Rc::downgrade(&new_s);
                 }
-                PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
-                    action.call(&state);
-                }
-                PaneResponse::OpenAddress(address) => {
-                    layout.add_child(
-                        &mut self.project.registry,
-                        from,
-                        AddChild::AddressStruct(None, Some(address)),
-                    );
-                }
-                PaneResponse::OpenStruct(s) => layout.add_child(
-                    &mut self.project.registry,
-                    from,
-                    AddChild::AddressStruct(Some(s), None),
-                ),
-                PaneResponse::ProcessSelected(new_process) => {
-                    self.process_changed(new_process);
-                }
-                PaneResponse::AddChild(child) => {
-                    layout.add_child(&mut self.project.registry, from, child)
-                }
-                PaneResponse::Close => {
-                    eprintln!("Ignoring close");
-                }
+                None => {}
+                x => todo!("only expect unhandled process selected response but got {x:?}"),
             }
+
+            self.this_frame = this_frame;
         });
     }
 }
