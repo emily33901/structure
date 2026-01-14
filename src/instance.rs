@@ -5,7 +5,7 @@ use std::{
 };
 
 use egui::{Align, Layout, RichText, collapsing_header::CollapsingState, vec2};
-use egui_extras::{Size, StripBuilder};
+use egui_extras::{Column, Size, StripBuilder};
 
 use crate::{
     Address, State,
@@ -17,7 +17,7 @@ use crate::{
     ui::{self, NODE_UNIT_ROW_HEIGHT},
 };
 
-#[derive(Hash)]
+#[derive(Hash, Clone)]
 pub struct Location(u64);
 
 impl Location {
@@ -34,20 +34,20 @@ impl Location {
     }
 }
 
-pub struct NodeInstance<'a> {
+pub struct NodeInstance {
     address: usize,
     offset_in_parent: usize,
     location: Location,
 
-    definition: Ref<'a, RefCell<Node>>,
+    definition: Rc<RefCell<Node>>,
 }
 
-impl<'a> NodeInstance<'a> {
+impl NodeInstance {
     fn new(
         address: usize,
         offset_in_parent: usize,
         location: Location,
-        definition: Ref<'a, RefCell<Node>>,
+        definition: Rc<RefCell<Node>>,
     ) -> Self {
         Self {
             address,
@@ -133,6 +133,8 @@ pub struct LogicInstance {
     offset_in_parent: usize,
     location: Location,
     definition: Rc<RefCell<Logic>>,
+    cached_nodes: RefCell<Option<Vec<Rc<RefCell<Node>>>>>,
+    cached_offsets: RefCell<Option<Vec<usize>>>,
 }
 
 impl LogicInstance {
@@ -147,6 +149,8 @@ impl LogicInstance {
             offset_in_parent,
             location,
             address,
+            cached_nodes: Default::default(),
+            cached_offsets: Default::default(),
         }
     }
 
@@ -154,34 +158,188 @@ impl LogicInstance {
         egui::Id::new(&self.location)
     }
 
-    pub fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
-        // Evaluate script and render result
-        let script = self.definition.borrow().script.clone();
+    fn collapsing(&self, ctx: &egui::Context) -> CollapsingState {
+        let eid = self.ui_id();
+        CollapsingState::load_with_default_open(ctx, eid, false)
+    }
 
-        // Create scope with context
-        let mut scope = rhai::Scope::new();
-        scope.push("address", self.address as i64);
-        // TODO: Add memory reading API to scope
+    fn id(&self) -> RegistryId {
+        self.definition.borrow().id
+    }
+
+    fn name(&self) -> Ref<'_, str> {
+        Ref::map(self.definition.borrow(), |definition| {
+            definition.name.as_str()
+        })
+    }
+
+    fn evaluate(&self, state: &RefCell<State>) -> Vec<Rc<RefCell<Node>>> {
+        if let Some(cached) = self.cached_nodes.borrow().as_ref() {
+            return cached.clone();
+        }
 
         // Evaluate script
+        let script = self.definition.borrow().script.clone();
+        let mut scope = rhai::Scope::new();
+        scope.push("address", self.address as i64);
+
         let result = state.borrow().script_engine.evaluate(&script, &mut scope);
 
-        match result {
-            Ok(node_type) => {
-                // Parse node_type string and render appropriate node
-                ui.label(format!("Logic → {}", node_type));
-                // TODO: Actually create and render the node type
-            }
-            Err(err) => {
-                ui.colored_label(egui::Color32::RED, format!("Script error: {}", err));
-            }
+        let nodes = match result {
+            Ok(node_type_str) => crate::script::parse_multiple_nodes(&node_type_str)
+                .into_iter()
+                .map(|node| Rc::new(RefCell::new(node)))
+                .collect(),
+            Err(_) => vec![],
+        };
+
+        // Cache the offsets for each node
+        let mut offsets = Vec::with_capacity(nodes.len());
+        let mut current_offset = 0;
+        for node_rc in &nodes {
+            offsets.push(current_offset);
+            current_offset += node_rc.borrow().byte_size();
         }
+
+        *self.cached_nodes.borrow_mut() = Some(nodes.clone());
+        *self.cached_offsets.borrow_mut() = Some(offsets);
+        nodes
+    }
+
+    fn offset_for_row(&self, index: usize) -> usize {
+        self.cached_offsets
+            .borrow()
+            .as_ref()
+            .and_then(|offsets| offsets.get(index).copied())
+            .unwrap_or(0)
+    }
+
+    fn row_heights<'instance, 'state, 'state_owner>(
+        &'instance self,
+        ctx: egui::Context,
+        state: &'state RefCell<State<'state_owner>>,
+        item_spacing_y: f32,
+    ) -> LogicRowHeightIterator<'instance, 'state, 'state_owner> {
+        let nodes = self.evaluate(state);
+        LogicRowHeightIterator {
+            ctx,
+            logic: self,
+            nodes,
+            state,
+            cur_row: 0,
+            cur_offset: 0,
+            item_spacing_y,
+        }
+    }
+
+    pub fn row_count(&self, state: &RefCell<State>) -> usize {
+        let nodes = self.evaluate(state);
+        if nodes.is_empty() {
+            return 1; // Error case, show 1 row for error message
+        }
+        nodes.len() // Each node gets 1 row for now (simplified)
+    }
+
+    pub fn byte_size(&self, state: &RefCell<State>) -> usize {
+        self.evaluate(state)
+            .iter()
+            .map(|node_rc| node_rc.borrow().byte_size())
+            .sum()
+    }
+
+    pub fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
+        let max_height = ui.available_height();
+        let nodes = self.evaluate(state);
+
+        if nodes.is_empty() {
+            ui.colored_label(egui::Color32::YELLOW, "Script returned no nodes");
+            return;
+        }
+
+        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+            let style = ui.style_mut();
+            style.override_text_style = Some(egui::TextStyle::Monospace);
+
+            let heights = self.row_heights(ui.ctx().clone(), state, ui.spacing().item_spacing.y);
+
+            egui_extras::TableBuilder::new(ui)
+                .vscroll(false)
+                .max_scroll_height(max_height)
+                .column(Column::remainder())
+                .sense(egui::Sense::click())
+                .body(|body| {
+                    body.heterogeneous_rows(heights, |mut row| {
+                        let index = row.index();
+                        let offset = self.offset_for_row(index);
+
+                        row.col(|ui| {
+                            if index >= nodes.len() {
+                                return;
+                            }
+
+                            let node_rc = &nodes[index];
+                            let node_instance = NodeInstance::new(
+                                self.address + offset,
+                                self.offset_in_parent + offset,
+                                self.location.progress(offset),
+                                node_rc.clone(),
+                            );
+
+                            node_instance.ui(ui, state);
+                        });
+                    });
+                });
+        });
     }
 }
 
-impl<'a> NodeInstance<'a> {
-    fn row_count(&self) -> usize {
-        self.definition.borrow().row_count()
+struct LogicRowHeightIterator<'instance, 'state, 'state_owner> {
+    ctx: egui::Context,
+    logic: &'instance LogicInstance,
+    nodes: Vec<Rc<RefCell<Node>>>,
+    state: &'state RefCell<State<'state_owner>>,
+    cur_row: usize,
+    cur_offset: usize,
+    item_spacing_y: f32,
+}
+
+impl<'instance, 'state, 'state_owner> Iterator
+    for LogicRowHeightIterator<'instance, 'state, 'state_owner>
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cur_row >= self.nodes.len() {
+            return None;
+        }
+
+        let node_rc = &self.nodes[self.cur_row];
+        let node_instance = NodeInstance::new(
+            self.logic.address + self.cur_offset,
+            self.logic.offset_in_parent + self.cur_offset,
+            self.logic.location.progress(self.cur_offset),
+            node_rc.clone(),
+        );
+
+        let height = node_instance.height(self.item_spacing_y, &self.ctx, self.state);
+
+        self.cur_offset += node_rc.borrow().byte_size();
+        self.cur_row += 1;
+
+        Some(height)
+    }
+}
+
+impl NodeInstance {
+    fn row_count(&self, state: &RefCell<State>) -> usize {
+        match &*self.definition.borrow() {
+            Node::U8 | Node::U16 | Node::U32 | Node::U64 | Node::Pointer(_) => 1,
+            Node::Struct(s) => s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1),
+            Node::Logic(_) => {
+                let logic_instance = self.logic_instance(state).unwrap();
+                logic_instance.row_count(state)
+            }
+        }
     }
 
     fn byte_size(&self) -> usize {
@@ -189,6 +347,38 @@ impl<'a> NodeInstance<'a> {
     }
 
     pub fn height(&self, item_spacing_y: f32, ctx: &egui::Context, state: &RefCell<State>) -> f32 {
+        // Check if this is a logic node - logic nodes support collapsing
+        if let Some(logic_instance) = self.logic_instance(state) {
+            let collapsing = logic_instance.collapsing(ctx);
+
+            // Header size with extra padding (same as structs)
+            let extra = 16.0 + item_spacing_y;
+
+            let openness = collapsing.openness(ctx);
+
+            if openness == 0.0 {
+                return extra; // Just header when collapsed
+            }
+
+            // Calculate total height of all evaluated nodes
+            let nodes = logic_instance.evaluate(state);
+            let content_height: f32 = nodes
+                .iter()
+                .enumerate()
+                .map(|(idx, node_rc)| {
+                    let node_instance = NodeInstance::new(
+                        logic_instance.address,
+                        logic_instance.offset_in_parent + idx * 8, // Approximate offset
+                        logic_instance.location.progress(idx * 8),
+                        node_rc.clone(),
+                    );
+                    node_instance.height(item_spacing_y, ctx, state) + item_spacing_y
+                })
+                .sum();
+
+            return content_height * openness + extra;
+        }
+
         let Some(struct_instance) = self.struct_instance(state) else {
             return ui::NODE_UNIT_ROW_HEIGHT;
         };
@@ -340,6 +530,54 @@ impl<'a> NodeInstance<'a> {
         );
     }
 
+    fn logic_heading(
+        &self,
+        ui: &mut egui::Ui,
+        logic_instance: &LogicInstance,
+        state: &RefCell<State>,
+    ) -> CollapsingState {
+        let mut collapsing = logic_instance.collapsing(ui.ctx());
+
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                let openness = collapsing.openness(ui.ctx());
+
+                self.heading_offset_and_address(
+                    ui,
+                    |ui| {
+                        let (_id, rect) =
+                            ui.allocate_space(egui::Vec2::splat(ui.spacing().icon_width));
+                        let response =
+                            ui.interact(rect, ui.id().with(collapsing.id()), egui::Sense::click());
+                        if response.clicked() {
+                            collapsing.toggle(ui);
+                        }
+
+                        egui::collapsing_header::paint_default_icon(ui, openness, &response);
+                    },
+                    state,
+                );
+
+                ui.label("Logic");
+
+                ui.add_space(ui::spacing(ui));
+
+                // Display logic name
+                let logic_name = logic_instance.name();
+                ui.label(&*logic_name);
+
+                ui.add_space(ui::spacing(ui));
+
+                // Display node count
+                let nodes = logic_instance.evaluate(state);
+                ui.label(format!("({} nodes)", nodes.len()));
+            },
+        );
+        collapsing
+    }
+
     fn node_struct_ui_inner(
         &self,
         ui: &mut egui::Ui,
@@ -368,11 +606,39 @@ impl<'a> NodeInstance<'a> {
         );
     }
 
-    fn node_ui_inner(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
-        self.heading(ui, state);
+    fn logic_instance_ui_inner(
+        &self,
+        ui: &mut egui::Ui,
+        logic_instance: &LogicInstance,
+        state: &RefCell<State>,
+    ) {
+        let height = self.height(ui.spacing().item_spacing.y, ui.ctx(), state);
 
-        let definition = self.definition.borrow();
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), height),
+            Layout::top_down(Align::Min),
+            |ui| {
+                let spacing = ui::spacing(ui);
+
+                let mut collapse_state = self.logic_heading(ui, logic_instance, state);
+
+                collapse_state.show_body_unindented(ui, |ui| {
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.add_space(spacing);
+
+                        logic_instance.ui(ui, state);
+                    })
+                    .inner
+                });
+            },
+        );
+    }
+
+    fn node_ui_inner(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+            self.heading(ui, state);
+
+            let definition = self.definition.borrow();
             let size = match &*definition {
                 Node::U64 => {
                     ui.label("U64");
@@ -402,7 +668,7 @@ impl<'a> NodeInstance<'a> {
         if let Some(struct_instance) = self.struct_instance(state) {
             self.node_struct_ui_inner(ui, &struct_instance, state);
         } else if let Some(logic_instance) = self.logic_instance(state) {
-            logic_instance.ui(ui, state);
+            self.logic_instance_ui_inner(ui, &logic_instance, state);
         } else {
             self.node_ui_inner(ui, state);
         }
@@ -504,6 +770,12 @@ impl<'a> NodeInstance<'a> {
                     row_index,
                 ));
             }
+            if ui.button("Logic").clicked() {
+                return Some((
+                    Node::Logic(Rc::downgrade(&state.borrow_mut().registry.default_logic())),
+                    row_index,
+                ));
+            }
             if ui.button("U64").clicked() {
                 return Some((Node::U64, row_index));
             }
@@ -539,15 +811,16 @@ impl StructInstance {
         })
     }
 
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
+    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance> {
         let definition = self.definition.borrow();
-        let node_definition =
-            Ref::filter_map(definition, |definition| definition.nodes.get(&row)).ok()?;
+        let node_cell = definition.nodes.get(&row)?;
+        // Wrap the node in an Rc to satisfy NodeInstance's requirement
+        let node_rc = Rc::new(RefCell::new(node_cell.borrow().clone()));
         Some(NodeInstance::new(
             address,
             offset,
             self.location.progress(offset),
-            node_definition,
+            node_rc,
         ))
     }
 
@@ -763,7 +1036,7 @@ struct StructRowHeightIterator<'instance, 'state, 'state_owner> {
 }
 
 impl<'a, 'b, 'c> StructRowHeightIterator<'a, 'b, 'c> {
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
+    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance> {
         self.instance.node(row, address, offset)
     }
 

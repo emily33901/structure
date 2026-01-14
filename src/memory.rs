@@ -142,7 +142,7 @@ pub(crate) fn highlightable_address_text(
     if let Some(highlighted_address) = state.borrow().last_frame.highlighted_address
         && highlighted_address == address
     {
-        eprintln!("address highlighted");
+        println!("address highlighted");
         text = text.background_color(Color32::DARK_RED);
     }
 

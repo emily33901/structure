@@ -322,6 +322,12 @@ impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         cc.egui_ctx.set_theme(Theme::Dark);
 
+        #[cfg(debug_assertions)]
+        cc.egui_ctx.style_mut(|style| {
+            style.debug.debug_on_hover = true;
+            style.debug.hover_shows_next = true;
+        });
+
         // cc.egui_ctx.set_debug_on_hover(true);
 
         let mut fonts = egui::FontDefinitions::default();

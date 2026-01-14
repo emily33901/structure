@@ -4,7 +4,7 @@ use egui::ahash::HashMap;
 
 use crate::registry::RegistryId;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Node {
     U8,
     U16,
@@ -79,15 +79,12 @@ pub struct LogicBuilder {
 
 impl LogicBuilder {
     pub(crate) fn new(script: String) -> Self {
-        Self {
-            script,
-            name: None,
-        }
+        Self { script, name: None }
     }
 
     pub(crate) fn default() -> Self {
         Self {
-            script: "\"u64\"".to_string(),
+            script: "\"u64, u64, u64, u64, u64, u64, u64\"".to_string(),
             name: None,
         }
     }
@@ -109,16 +106,6 @@ impl LogicBuilder {
 }
 
 impl Node {
-    pub fn row_count(&self) -> usize {
-        match self {
-            Self::U64 | Self::U32 | Self::U16 | Self::U8 => 1,
-            Self::Pointer(s) | Self::Struct(s) => {
-                s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1)
-            }
-            Self::Logic(_) => 1,
-        }
-    }
-
     pub fn byte_size(&self) -> usize {
         match self {
             Self::U64 => 8,
