@@ -65,75 +65,70 @@ pub(crate) fn rtti_if_address_is_vtable<'a>(
     state.rtti.get(state.memory.read(address - 8), state.memory)
 }
 
-pub(crate) fn disect_bytes(
-    state: &RefCell<State>,
-    bytes: &[u8],
-    ui: &mut egui::Ui,
-) -> Option<AddressResponse> {
-    let mut response = None;
+pub(crate) fn disect_address(state: &RefCell<State>, address: usize, ui: &mut egui::Ui) {
+    let Some(section) = section_for_address(state.borrow().sections, address) else {
+        return;
+    };
 
+    ui.add(egui::Label::new(format!("-> <{}>", section.category.as_str(),)).selectable(false));
+
+    let address_text = if let Some(module_path) = section.module_path.as_ref() {
+        format!(
+            "{}.{:016X}",
+            std::path::Path::new(module_path)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            address
+        )
+    } else {
+        format!("{:016X}", address)
+    };
+
+    let r = ui.add(
+        egui::Label::new(highlightable_address_text(state, address, address_text))
+            .sense(egui::Sense::click()),
+    );
+
+    if r.hovered() {
+        state.borrow_mut().this_frame_mut().highlighted_address = Some(address);
+    }
+
+    if r.clicked() {
+        state.borrow_mut().response(AddressResponse::AddressStruct(
+            Some(
+                state
+                    .borrow_mut()
+                    .registry
+                    .find_or_register_address(address.into()),
+            ),
+            None,
+        ));
+    }
+
+    if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
+        ui.label(rtti.names.join(" : "));
+    } else {
+        let address = state.borrow_mut().memory.read(address);
+        if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
+            ui.label(format!("-> {}", rtti.names.join(" : ")));
+        }
+    }
+}
+
+pub(crate) fn disect_bytes(state: &RefCell<State>, bytes: &[u8], ui: &mut egui::Ui) {
     let value = *interpret_as::<usize>(bytes);
 
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add(egui::Label::new(RichText::new(format!("{}", value))));
-        ui.add(egui::Label::new(RichText::new(format!("0x{:X}", value))));
 
         if value == 0 {
             return;
         }
 
-        let Some(section) = section_for_address(state.borrow().sections, value) else {
-            return;
-        };
-
-        ui.add(egui::Label::new(format!("-> <{}>", section.category.as_str(),)).selectable(false));
-
-        let address_text = if let Some(module_path) = section.module_path.as_ref() {
-            format!(
-                "{}.{:016X}",
-                std::path::Path::new(module_path)
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap(),
-                value
-            )
-        } else {
-            format!("{:016X}", value)
-        };
-
-        let r = ui.add(
-            egui::Label::new(highlightable_address_text(state, value, address_text))
-                .sense(egui::Sense::click()),
-        );
-
-        if r.hovered() {
-            state.borrow_mut().this_frame_mut().highlighted_address = Some(value);
-        }
-
-        if r.clicked() {
-            response = Some(AddressResponse::AddressStruct(
-                Some(
-                    state
-                        .borrow_mut()
-                        .registry
-                        .find_or_register_address(value.into()),
-                ),
-                None,
-            ));
-        }
-
-        if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), value) {
-            ui.label(rtti.names.join(" : "));
-        } else {
-            let address = state.borrow_mut().memory.read(value);
-            if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
-                ui.label(format!("-> {}", rtti.names.join(" : ")));
-            }
-        }
+        disect_address(state, value, ui);
     });
-
-    response
 }
 
 pub(crate) fn highlightable_address_text(

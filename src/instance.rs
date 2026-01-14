@@ -232,8 +232,31 @@ impl<'a> NodeInstance<'a> {
                     state,
                 );
 
+                match &*self.definition.borrow() {
+                    Node::Pointer(_) => ui.label("Pointer"),
+                    Node::Struct(_) => ui.label("Struct"),
+                    _ => unreachable!(),
+                };
+
                 ui.add_space(ui::spacing(ui));
+
                 struct_instance.heading(ui, state);
+
+                ui.add_space(ui::spacing(ui));
+
+                if ui
+                    .label(highlightable_address_text(
+                        state,
+                        struct_instance.address,
+                        format!("{:016X}", struct_instance.address),
+                    ))
+                    .hovered()
+                {
+                    state.borrow_mut().this_frame_mut().highlighted_address =
+                        Some(struct_instance.address)
+                }
+
+                memory::disect_address(state, struct_instance.address, ui);
             },
         );
         collapsing
@@ -380,9 +403,7 @@ impl<'a> NodeInstance<'a> {
 
                 strip.cell(|ui| {
                     let bytes = &buffer;
-                    if let Some(r) = memory::disect_bytes(state, bytes, ui) {
-                        state.borrow_mut().response(r);
-                    }
+                    memory::disect_bytes(state, bytes, ui)
                 });
             });
     }
