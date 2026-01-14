@@ -1,4 +1,3 @@
-use core::f32;
 use std::{cell::RefCell, rc::Weak};
 
 use egui::ahash::HashMap;
@@ -13,6 +12,7 @@ pub enum Node {
     U64,
     Struct(Weak<RefCell<Struct>>),
     Pointer(Weak<RefCell<Struct>>),
+    Logic(Weak<RefCell<Logic>>),
 }
 
 #[derive(Debug)]
@@ -20,6 +20,13 @@ pub struct Struct {
     pub(crate) row_count: usize,
     /// Map of row to Node
     pub(crate) nodes: HashMap<usize, RefCell<Node>>,
+    pub(crate) name: String,
+    pub(crate) id: RegistryId,
+}
+
+#[derive(Debug)]
+pub struct Logic {
+    pub(crate) script: String,
     pub(crate) name: String,
     pub(crate) id: RegistryId,
 }
@@ -65,6 +72,42 @@ impl StructBuilder {
     }
 }
 
+pub struct LogicBuilder {
+    pub(crate) script: String,
+    pub(crate) name: Option<String>,
+}
+
+impl LogicBuilder {
+    pub(crate) fn new(script: String) -> Self {
+        Self {
+            script,
+            name: None,
+        }
+    }
+
+    pub(crate) fn default() -> Self {
+        Self {
+            script: "\"u64\"".to_string(),
+            name: None,
+        }
+    }
+
+    pub(crate) fn name(self, name: &str) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..self
+        }
+    }
+
+    pub(crate) fn build(self, id: RegistryId) -> Logic {
+        Logic {
+            script: self.script,
+            name: self.name.unwrap_or_else(|| format!("logic-{}", id)),
+            id,
+        }
+    }
+}
+
 impl Node {
     pub fn row_count(&self) -> usize {
         match self {
@@ -72,6 +115,7 @@ impl Node {
             Self::Pointer(s) | Self::Struct(s) => {
                 s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1)
             }
+            Self::Logic(_) => 1,
         }
     }
 
@@ -90,6 +134,7 @@ impl Node {
                     size
                 })
                 .unwrap_or(8),
+            Self::Logic(_) => 8,
         }
     }
 }

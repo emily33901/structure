@@ -24,6 +24,7 @@ mod v1 {
         U64,
         Struct(RegistryId),
         Pointer(RegistryId),
+        Logic(RegistryId),
     }
 
     impl Node {
@@ -38,6 +39,9 @@ mod v1 {
                 )),
                 Node::Pointer(registry_id) => crate::definition::Node::Pointer(Rc::downgrade(
                     registry.structs.get(registry_id).unwrap(),
+                )),
+                Node::Logic(registry_id) => crate::definition::Node::Logic(Rc::downgrade(
+                    registry.logics.get(registry_id).unwrap(),
                 )),
             }
         }
@@ -54,10 +58,17 @@ mod v1 {
     pub(super) struct Address(pub(super) String, pub(super) usize);
 
     #[derive(Serialize, Deserialize)]
+    pub(super) struct Logic {
+        pub(super) script: String,
+        pub(super) name: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
     pub(super) struct Registry {
         pub(super) next_id: usize,
         pub(super) structs: HashMap<RegistryId, Struct>,
         pub(super) addresses: HashMap<RegistryId, Address>,
+        pub(super) logics: HashMap<RegistryId, Logic>,
     }
 
     #[derive(Serialize, Deserialize)]
@@ -107,6 +118,11 @@ mod v1 {
                     .into_iter()
                     .map(|(k, v)| (k, Rc::new(RefCell::new(v.into()))))
                     .collect(),
+                logics: value
+                    .logics
+                    .into_iter()
+                    .map(|(k, v)| (k, Rc::new(RefCell::new(v.make_real(k)))))
+                    .collect(),
                 dirty: true,
             };
 
@@ -124,6 +140,16 @@ mod v1 {
     impl From<Address> for crate::Address {
         fn from(value: Address) -> Self {
             Self(value.0, value.1)
+        }
+    }
+
+    impl Logic {
+        fn make_real(&self, id: RegistryId) -> crate::definition::Logic {
+            crate::definition::Logic {
+                script: self.script.clone(),
+                name: self.name.clone(),
+                id,
+            }
         }
     }
 
@@ -189,6 +215,9 @@ impl v1::Node {
             crate::definition::Node::Pointer(s) => s
                 .upgrade()
                 .map(|s| Self::Pointer(registry.struct_id(&s).unwrap())),
+            crate::definition::Node::Logic(logic) => logic
+                .upgrade()
+                .map(|logic| Self::Logic(registry.logic_id(&logic).unwrap())),
         }
     }
 }
@@ -213,6 +242,15 @@ impl v1::Address {
     }
 }
 
+impl v1::Logic {
+    pub(crate) fn new(from: &crate::definition::Logic) -> Self {
+        Self {
+            script: from.script.clone(),
+            name: from.name.clone(),
+        }
+    }
+}
+
 impl v1::Registry {
     fn new(from: &crate::Registry) -> Self {
         Self {
@@ -226,6 +264,11 @@ impl v1::Registry {
                 .addresses
                 .iter()
                 .map(|(k, v)| (*k, v1::Address::new(&v.borrow())))
+                .collect(),
+            logics: from
+                .logics
+                .iter()
+                .map(|(k, v)| (*k, v1::Logic::new(&v.borrow())))
                 .collect(),
         }
     }

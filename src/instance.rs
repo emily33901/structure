@@ -9,7 +9,7 @@ use egui_extras::{Size, StripBuilder};
 
 use crate::{
     Address, State,
-    definition::{Node, Struct},
+    definition::{Logic, Node, Struct},
     memory::{self, highlightable_address_text},
     node::{StructAction, StructUiFlags},
     pane::AddressResponse,
@@ -77,6 +77,23 @@ impl<'a> NodeInstance<'a> {
             self.offset_in_parent,
         ))
     }
+
+    fn logic_instance(&self, _state: &RefCell<State>) -> Option<LogicInstance> {
+        let definition = match &*self.definition.borrow() {
+            Node::Logic(logic) => {
+                let logic = logic.upgrade()?;
+                logic
+            }
+            _ => return None,
+        };
+
+        Some(LogicInstance::new(
+            definition,
+            self.address,
+            self.location.progress(self.offset_in_parent),
+            self.offset_in_parent,
+        ))
+    }
 }
 
 pub struct StructInstance {
@@ -108,6 +125,57 @@ impl StructInstance {
     fn collapsing(&self, ctx: &egui::Context) -> CollapsingState {
         let eid = self.ui_id();
         CollapsingState::load_with_default_open(ctx, eid, false)
+    }
+}
+
+pub struct LogicInstance {
+    address: usize,
+    offset_in_parent: usize,
+    location: Location,
+    definition: Rc<RefCell<Logic>>,
+}
+
+impl LogicInstance {
+    pub fn new(
+        definition: Rc<RefCell<Logic>>,
+        address: usize,
+        location: Location,
+        offset_in_parent: usize,
+    ) -> Self {
+        Self {
+            definition,
+            offset_in_parent,
+            location,
+            address,
+        }
+    }
+
+    fn ui_id(&self) -> egui::Id {
+        egui::Id::new(&self.location)
+    }
+
+    pub fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
+        // Evaluate script and render result
+        let script = self.definition.borrow().script.clone();
+
+        // Create scope with context
+        let mut scope = rhai::Scope::new();
+        scope.push("address", self.address as i64);
+        // TODO: Add memory reading API to scope
+
+        // Evaluate script
+        let result = state.borrow().script_engine.evaluate(&script, &mut scope);
+
+        match result {
+            Ok(node_type) => {
+                // Parse node_type string and render appropriate node
+                ui.label(format!("Logic → {}", node_type));
+                // TODO: Actually create and render the node type
+            }
+            Err(err) => {
+                ui.colored_label(egui::Color32::RED, format!("Script error: {}", err));
+            }
+        }
     }
 }
 
@@ -322,6 +390,7 @@ impl<'a> NodeInstance<'a> {
                     ui.label("U8");
                     1
                 }
+                Node::Logic(_) => unreachable!("Logic nodes handled separately"),
                 _ => unreachable!(),
             };
 
@@ -332,6 +401,8 @@ impl<'a> NodeInstance<'a> {
     fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         if let Some(struct_instance) = self.struct_instance(state) {
             self.node_struct_ui_inner(ui, &struct_instance, state);
+        } else if let Some(logic_instance) = self.logic_instance(state) {
+            logic_instance.ui(ui, state);
         } else {
             self.node_ui_inner(ui, state);
         }

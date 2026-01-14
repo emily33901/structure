@@ -122,6 +122,7 @@ pub(crate) fn disect_bytes(state: &RefCell<State>, bytes: &[u8], ui: &mut egui::
 
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add(egui::Label::new(RichText::new(format!("{}", value))));
+        ui.add(egui::Label::new(RichText::new(format!("0x{:X}", value))));
 
         if value == 0 {
             return;

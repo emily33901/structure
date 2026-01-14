@@ -3,6 +3,8 @@ use serde::Serialize;
 
 use super::Address;
 use super::Pane;
+use crate::definition::Logic;
+use crate::definition::LogicBuilder;
 use crate::definition::Struct;
 use crate::definition::StructBuilder;
 use std::cell::RefCell;
@@ -24,6 +26,7 @@ pub struct Registry {
     // TODO(emily): Consider using an index map
     pub(crate) structs: HashMap<RegistryId, Rc<RefCell<Struct>>>,
     pub(crate) addresses: HashMap<RegistryId, Rc<RefCell<Address>>>,
+    pub(crate) logics: HashMap<RegistryId, Rc<RefCell<Logic>>>,
 
     pub(crate) dirty: bool,
 }
@@ -90,5 +93,23 @@ impl Registry {
         }
 
         None
+    }
+
+    pub(crate) fn default_logic(&mut self) -> Rc<RefCell<Logic>> {
+        self.register_logic(LogicBuilder::default())
+    }
+
+    pub(crate) fn register_logic(&mut self, logic: LogicBuilder) -> Rc<RefCell<Logic>> {
+        let id = self.next_id();
+        self.logics.insert(id, RefCell::new(logic.build(id)).into());
+        self.logics.get(&id).unwrap().clone()
+    }
+
+    pub(crate) fn find_logic(&self, id: &RegistryId) -> Option<Rc<RefCell<Logic>>> {
+        self.logics.get(id).cloned()
+    }
+
+    pub(crate) fn logic_id(&self, logic: &Rc<RefCell<Logic>>) -> Option<RegistryId> {
+        Some(logic.borrow().id)
     }
 }

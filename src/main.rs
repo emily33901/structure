@@ -8,6 +8,7 @@ use process::{OpenProcess, Process};
 use project::{Layout, Project};
 use registry::Registry;
 use rtti::RttiCache;
+use script::ScriptEngine;
 
 use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse};
 
@@ -21,6 +22,7 @@ mod process;
 mod project;
 mod registry;
 mod rtti;
+mod script;
 mod storage;
 pub mod ui;
 
@@ -251,6 +253,7 @@ pub struct State<'a> {
     sections: &'a [Section],
     modules: &'a [Module],
     rtti: &'a mut RttiCache,
+    script_engine: &'a ScriptEngine,
     processes: &'a [Process],
     process: Option<&'a Process>,
 
@@ -282,6 +285,7 @@ struct App {
     sections: Option<Vec<Section>>,
     modules: Option<Vec<Module>>,
     rtti: RttiCache,
+    script_engine: ScriptEngine,
     processes: Vec<Process>,
 
     test: Box<Test>,
@@ -308,6 +312,7 @@ impl Default for App {
             tree_options: Default::default(),
             processes: Default::default(),
             rtti: Default::default(),
+            script_engine: Default::default(),
             this_frame: Default::default(),
         }
     }
@@ -469,6 +474,7 @@ impl eframe::App for App {
                 sections: self.sections.as_deref().unwrap_or(&[]),
                 modules: self.modules.as_deref().unwrap_or(&[]),
                 rtti: &mut self.rtti,
+                script_engine: &self.script_engine,
                 processes: self.processes.as_slice(),
                 process: self.process.as_ref(),
 
