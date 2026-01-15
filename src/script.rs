@@ -21,6 +21,7 @@ impl ScriptEngine {
         // Register the RhaiMemory type and its methods
         engine
             .register_type::<RhaiMemory>()
+            .register_fn("read_string", RhaiMemory::read_string)
             .register_fn("read_u8", RhaiMemory::read_u8)
             .register_fn("read_u16", RhaiMemory::read_u16)
             .register_fn("read_u32", RhaiMemory::read_u32)

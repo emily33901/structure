@@ -96,15 +96,14 @@ pub(crate) fn disect_address(state: &RefCell<State>, address: usize, ui: &mut eg
     }
 
     if r.clicked() {
-        state.borrow_mut().response(AddressResponse::AddressStruct(
-            Some(
-                state
-                    .borrow_mut()
-                    .registry
-                    .find_or_register_address(address.into()),
-            ),
-            None,
-        ));
+        let address = state
+            .borrow_mut()
+            .registry
+            .find_or_register_address(address.into());
+
+        state
+            .borrow_mut()
+            .response(AddressResponse::AddressStruct(Some(address), None));
     }
 
     if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
@@ -307,5 +306,12 @@ impl RhaiMemory {
 
     pub fn read_u64(&mut self, address: i64) -> i64 {
         unsafe { (*(*self.inner.borrow_mut())).read::<u64>(address as usize) as i64 }
+    }
+
+    pub fn read_string(&mut self, address: i64, len: i64) -> String {
+        let len = len as usize;
+        let mut buffer = vec![0_u8; len];
+        unsafe { (*(*self.inner.borrow_mut())).get(address as usize, &mut buffer) }
+        String::from_utf8_lossy(&buffer).to_string()
     }
 }

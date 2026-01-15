@@ -453,7 +453,7 @@ impl NodeInstance {
                     utf8_ui(ui, address, len, state);
                     return;
                 }
-                _ => unreachable!(),
+                x => unreachable!("no idea what to do with {x:?}"),
             };
 
             self.none_ui(ui, Some(size), state);
@@ -631,7 +631,9 @@ fn utf8_ui(ui: &mut egui::Ui, address: usize, len: &mut usize, state: &RefCell<S
 
     ui.add_space(ui::spacing(ui));
 
-    let mut buffer = vec![0_u8; *len];
+    let len = std::cmp::min(*len, 2000);
+
+    let mut buffer = vec![0_u8; len];
     state.borrow_mut().memory.get(address, &mut buffer);
     let s = String::from_utf8_lossy(&buffer);
 
