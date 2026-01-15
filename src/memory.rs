@@ -1,4 +1,8 @@
-use std::{cell::RefCell, mem::MaybeUninit, rc::Rc};
+use std::{
+    cell::{RefCell, RefMut},
+    mem::MaybeUninit,
+    rc::Rc,
+};
 
 use anyhow::Result;
 use egui::{Color32, RichText, ahash::HashMap};
@@ -277,9 +281,9 @@ impl std::io::Read for MemoryReader<'_> {
     }
 }
 
-/// Rhai-compatible wrapper for Memory that can be used in scripts.
-/// Uses interior mutability since Memory requires &mut self for reads
-/// and Rhai passes by value/clone.
+// TODO(emily): Gross interior mutability hack to appease Rhai, since it doesn't (rightfully) understand
+// lifetimes, so we store a raw mut pointer to it here. This is dangerous, but memory should always live longer than
+// us.
 #[derive(Clone)]
 pub struct RhaiMemory {
     inner: Rc<RefCell<*mut Memory<'static>>>,
@@ -292,26 +296,30 @@ impl RhaiMemory {
         }
     }
 
+    pub fn inner<'a>(&'a self) -> RefMut<'a, Memory<'static>> {
+        RefMut::map(self.inner.borrow_mut(), |&mut zelf| unsafe { &mut *zelf })
+    }
+
     pub fn read_u8(&mut self, address: i64) -> i64 {
-        unsafe { (*(*self.inner.borrow_mut())).read::<u8>(address as usize) as i64 }
+        self.inner().read::<u8>(address as usize) as i64
     }
 
     pub fn read_u16(&mut self, address: i64) -> i64 {
-        unsafe { (*(*self.inner.borrow_mut())).read::<u16>(address as usize) as i64 }
+        self.inner().read::<u16>(address as usize) as i64
     }
 
     pub fn read_u32(&mut self, address: i64) -> i64 {
-        unsafe { (*(*self.inner.borrow_mut())).read::<u32>(address as usize) as i64 }
+        self.inner().read::<u32>(address as usize) as i64
     }
 
     pub fn read_u64(&mut self, address: i64) -> i64 {
-        unsafe { (*(*self.inner.borrow_mut())).read::<u64>(address as usize) as i64 }
+        self.inner().read::<u64>(address as usize) as i64
     }
 
     pub fn read_string(&mut self, address: i64, len: i64) -> String {
         let len = len as usize;
         let mut buffer = vec![0_u8; len];
-        unsafe { (*(*self.inner.borrow_mut())).get(address as usize, &mut buffer) }
+        self.inner().get(address as usize, &mut buffer);
         String::from_utf8_lossy(&buffer).to_string()
     }
 
@@ -322,7 +330,7 @@ impl RhaiMemory {
         let max_len = max_len as usize;
 
         while buffer.len() < max_len {
-            let byte = unsafe { (*(*self.inner.borrow_mut())).read(address) };
+            let byte = self.inner().read(address);
             if byte == 0 {
                 break;
             }

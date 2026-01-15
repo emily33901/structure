@@ -12,15 +12,12 @@ impl ScriptEngine {
     pub fn new() -> Self {
         let mut engine = Engine::new();
 
-        // Register memory reading functions
-        // These will be available to all scripts
         Self::register_api(&mut engine);
 
         Self { engine }
     }
 
     fn register_api(engine: &mut Engine) {
-        // Register the RhaiMemory type and its methods
         engine
             .register_type::<RhaiMemory>()
             .register_fn("read_string", RhaiMemory::read_string)
@@ -45,7 +42,6 @@ impl ScriptEngine {
             .register_fn("make_u16", rhai_logic_node::make_u16)
             .register_fn("make_u8", rhai_logic_node::make_u8);
 
-        // Register scratch pad functions
         engine
             .register_type::<RhaiScratch>()
             .register_fn("print", RhaiScratch::print)
@@ -67,25 +63,13 @@ impl ScriptEngine {
         let ast = self.engine.compile(script)?;
         let mut scope = rhai::Scope::new();
 
-        // Push address and memory into scope for closures to capture
         scope.push("address", address as i64);
         scope.push("memory", RhaiMemory::new(memory));
         scope.push("scratch", RhaiScratch::new(logic_id, scratch_pad));
 
-        // Evaluate script to get the callbacks map
         let callbacks_map: rhai::Map = self.engine.eval_ast_with_scope(&mut scope, &ast)?;
 
         Ok((ast, callbacks_map))
-    }
-
-    pub fn evaluate(
-        &self,
-        script: &str,
-        scope: &mut Scope,
-    ) -> Result<String, Box<rhai::EvalAltResult>> {
-        // Evaluate script and return result as string
-        // The string describes what node type to display
-        self.engine.eval_with_scope::<String>(scope, script)
     }
 }
 

@@ -22,7 +22,7 @@ impl ScratchPad {
     }
 }
 
-/// Rhai-compatible wrapper for ScratchPad that can be used in scripts.
+// TODO(emily): Gross interior mutability (see RhaiMemory)
 #[derive(Clone)]
 pub struct RhaiScratch {
     logic_id: RegistryId,
