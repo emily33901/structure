@@ -23,7 +23,7 @@ use crate::{
     ui::{self, NODE_UNIT_ROW_HEIGHT},
 };
 
-#[derive(Hash, Clone)]
+#[derive(Hash, Clone, Eq, PartialEq)]
 pub struct Location(u64);
 
 impl Location {
@@ -85,7 +85,7 @@ impl NodeInstance {
         ))
     }
 
-    fn logic_instance(&self, state: &RefCell<State>) -> Option<LogicInstance> {
+    fn logic_instance(&self, state: &RefCell<State>) -> Option<Rc<LogicInstance>> {
         let definition = match &*self.definition.borrow() {
             Node::Logic(logic) => {
                 let logic = logic.upgrade()?;
@@ -94,13 +94,32 @@ impl NodeInstance {
             _ => return None,
         };
 
-        Some(LogicInstance::new(
+        let location = self.location.progress(self.offset_in_parent);
+
+        {
+            let state_ref = state.borrow();
+            if let Some(frame) = &state_ref.this_frame {
+                if let Some(cached) = frame.logic_instance_cache.get(&location) {
+                    return Some(cached.clone());
+                }
+            }
+        }
+
+        let instance = Rc::new(LogicInstance::new(
             definition,
             self.address,
-            self.location.progress(self.offset_in_parent),
+            location.clone(),
             self.offset_in_parent,
             state,
-        ))
+        ));
+
+        state
+            .borrow_mut()
+            .this_frame_mut()
+            .logic_instance_cache
+            .insert(location, instance.clone());
+
+        Some(instance)
     }
 
     fn row_count(&self, state: &RefCell<State>) -> usize {

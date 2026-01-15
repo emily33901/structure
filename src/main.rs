@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use egui::{Theme, vec2};
 use egui_tiles::{Tile, TileId, Tiles};
@@ -10,6 +10,7 @@ use registry::Registry;
 use rtti::RttiCache;
 use script::ScriptEngine;
 
+use crate::instance::{Location, LogicInstance};
 use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse, StructResponse};
 use crate::scratch::ScratchPad;
 
@@ -238,6 +239,7 @@ pub struct FrameState {
     current_tile_id: Option<TileId>,
     highlighted_address: Option<usize>,
     response: Option<(TileId, PaneResponse)>,
+    logic_instance_cache: HashMap<Location, Rc<LogicInstance>>,
 }
 
 impl FrameState {
