@@ -1,8 +1,10 @@
 use rhai::{Engine, Scope};
 use crate::definition::Node;
+use crate::instance::LogicCallbacks;
+use crate::memory::{Memory, RhaiMemory};
 
 pub struct ScriptEngine {
-    engine: Engine,
+    pub(crate) engine: Engine,
 }
 
 impl ScriptEngine {
@@ -16,9 +18,35 @@ impl ScriptEngine {
         Self { engine }
     }
 
-    fn register_api(_engine: &mut Engine) {
-        // API functions will be registered here
-        // For now, placeholder for future implementation
+    fn register_api(engine: &mut Engine) {
+        // Register the RhaiMemory type and its methods
+        engine
+            .register_type::<RhaiMemory>()
+            .register_fn("read_u8", RhaiMemory::read_u8)
+            .register_fn("read_u16", RhaiMemory::read_u16)
+            .register_fn("read_u32", RhaiMemory::read_u32)
+            .register_fn("read_u64", RhaiMemory::read_u64);
+    }
+
+    pub fn compile_logic_script(
+        &self,
+        script: &str,
+        address: usize,
+        memory: &mut Memory,
+    ) -> Result<(rhai::AST, LogicCallbacks), Box<rhai::EvalAltResult>> {
+        let ast = self.engine.compile(script)?;
+        let mut scope = rhai::Scope::new();
+
+        // Push address and memory into scope for closures to capture
+        scope.push("address", address as i64);
+        scope.push("memory", RhaiMemory::new(memory));
+
+        // Evaluate script to get the callbacks map
+        let callbacks_map: rhai::Map = self.engine.eval_ast_with_scope(&mut scope, &ast)?;
+
+        let callbacks = LogicCallbacks::from_map(&callbacks_map)?;
+
+        Ok((ast, callbacks))
     }
 
     pub fn evaluate(
@@ -42,7 +70,7 @@ pub fn parse_multiple_nodes(node_types: &str) -> Vec<Node> {
         .collect()
 }
 
-fn parse_node_result(node_type: &str) -> Option<Node> {
+pub fn parse_node_result(node_type: &str) -> Option<Node> {
     // Parse a single node type string into a Node
     match node_type.to_lowercase().as_str() {
         "u8" => Some(Node::U8),

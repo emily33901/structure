@@ -4,13 +4,13 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::registry::RegistryId;
 use crate::{Address, instance::StructInstance};
 use crate::{
     State,
     definition::Struct,
     node::{StructAction, StructUiFlags},
 };
+use crate::{definition::Node, registry::RegistryId};
 use crate::{instance::Location, process::Process};
 use egui::ScrollArea;
 use egui_extras::Column;
@@ -173,6 +173,7 @@ impl Pane {
                         **address.borrow(),
                         Location::new(state.borrow().registry.address_id(&address).unwrap()),
                         0,
+                        None, // No parent node for top-level
                     );
 
                     struct_instance.heading(ui, state);
@@ -335,6 +336,7 @@ pub enum PaneResponse {
     OpenStruct(Rc<RefCell<Struct>>),
     ProcessSelected(Process),
     AddChild(AddChild),
+    StructResponse(StructResponse),
     Close,
 }
 
@@ -353,6 +355,11 @@ pub enum AddChild {
     ProcessList,
 }
 
+#[derive(Debug)]
+pub enum StructResponse {
+    Replace(Weak<RefCell<Node>>, Weak<RefCell<Struct>>),
+}
+
 impl From<AddressResponse> for PaneResponse {
     fn from(val: AddressResponse) -> Self {
         PaneResponse::AddressStructResponse(val)
@@ -362,5 +369,11 @@ impl From<AddressResponse> for PaneResponse {
 impl From<StructAction> for PaneResponse {
     fn from(val: StructAction) -> Self {
         PaneResponse::AddressStructResponse(AddressResponse::Action(val))
+    }
+}
+
+impl From<StructResponse> for PaneResponse {
+    fn from(value: StructResponse) -> Self {
+        PaneResponse::StructResponse(value)
     }
 }

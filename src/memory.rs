@@ -1,4 +1,4 @@
-use std::{cell::RefCell, mem::MaybeUninit};
+use std::{cell::RefCell, mem::MaybeUninit, rc::Rc};
 
 use anyhow::Result;
 use egui::{Color32, RichText, ahash::HashMap};
@@ -275,5 +275,37 @@ impl std::io::Read for MemoryReader<'_> {
         let read_len = buf.len().min(self.range.end - pos);
         self.memory.get(pos, buf);
         Ok(read_len)
+    }
+}
+
+/// Rhai-compatible wrapper for Memory that can be used in scripts.
+/// Uses interior mutability since Memory requires &mut self for reads
+/// and Rhai passes by value/clone.
+#[derive(Clone)]
+pub struct RhaiMemory {
+    inner: Rc<RefCell<*mut Memory<'static>>>,
+}
+
+impl RhaiMemory {
+    pub fn new(memory: &mut Memory) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(memory as *mut _ as *mut Memory<'static>)),
+        }
+    }
+
+    pub fn read_u8(&mut self, address: i64) -> i64 {
+        unsafe { (*(*self.inner.borrow_mut())).read::<u8>(address as usize) as i64 }
+    }
+
+    pub fn read_u16(&mut self, address: i64) -> i64 {
+        unsafe { (*(*self.inner.borrow_mut())).read::<u16>(address as usize) as i64 }
+    }
+
+    pub fn read_u32(&mut self, address: i64) -> i64 {
+        unsafe { (*(*self.inner.borrow_mut())).read::<u32>(address as usize) as i64 }
+    }
+
+    pub fn read_u64(&mut self, address: i64) -> i64 {
+        unsafe { (*(*self.inner.borrow_mut())).read::<u64>(address as usize) as i64 }
     }
 }

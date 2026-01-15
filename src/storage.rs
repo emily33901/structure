@@ -171,7 +171,7 @@ mod v1 {
             real.nodes = self
                 .nodes
                 .into_iter()
-                .map(|(k, v)| (k, RefCell::new(v.make_real(registry))))
+                .map(|(k, v)| (k, Rc::new(RefCell::new(v.make_real(registry)))))
                 .collect()
         }
     }

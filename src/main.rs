@@ -10,7 +10,7 @@ use registry::Registry;
 use rtti::RttiCache;
 use script::ScriptEngine;
 
-use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse};
+use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse, StructResponse};
 
 pub mod definition;
 pub mod instance;
@@ -322,11 +322,11 @@ impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         cc.egui_ctx.set_theme(Theme::Dark);
 
-        #[cfg(debug_assertions)]
-        cc.egui_ctx.style_mut(|style| {
-            style.debug.debug_on_hover = true;
-            style.debug.hover_shows_next = true;
-        });
+        // #[cfg(debug_assertions)]
+        // cc.egui_ctx.style_mut(|style| {
+        //     style.debug.debug_on_hover = true;
+        //     style.debug.hover_shows_next = true;
+        // });
 
         // cc.egui_ctx.set_debug_on_hover(true);
 
@@ -417,6 +417,21 @@ impl App {
                 }
                 PaneResponse::Close => {
                     eprintln!("Ignoring close");
+                }
+                PaneResponse::StructResponse(StructResponse::Replace(weak_node, weak_struct)) => {
+                    let Some(node) = weak_node.upgrade() else {
+                        return;
+                    };
+
+                    match &mut *node.borrow_mut() {
+                        definition::Node::Struct(weak) =>  {
+                            *weak = weak_struct;
+                        },
+                        definition::Node::Pointer(weak) =>  {
+                            *weak = weak_struct;
+                        },
+                        _ => unreachable!()
+                    }
                 }
             }
         }

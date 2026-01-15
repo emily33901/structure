@@ -1,10 +1,13 @@
-use std::{cell::RefCell, rc::Weak};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use egui::ahash::HashMap;
 
 use crate::registry::RegistryId;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Node {
     U8,
     U16,
@@ -19,7 +22,7 @@ pub enum Node {
 pub struct Struct {
     pub(crate) row_count: usize,
     /// Map of row to Node
-    pub(crate) nodes: HashMap<usize, RefCell<Node>>,
+    pub(crate) nodes: HashMap<usize, Rc<RefCell<Node>>>,
     pub(crate) name: String,
     pub(crate) id: RegistryId,
 }
@@ -34,12 +37,12 @@ pub struct Logic {
 pub struct StructBuilder {
     pub(crate) row_count: usize,
     /// Map of row to Node
-    pub(crate) nodes: HashMap<usize, RefCell<Node>>,
+    pub(crate) nodes: HashMap<usize, Rc<RefCell<Node>>>,
     pub(crate) name: Option<String>,
 }
 
 impl StructBuilder {
-    pub(crate) fn new(row_count: usize, nodes: HashMap<usize, RefCell<Node>>) -> Self {
+    pub(crate) fn new(row_count: usize, nodes: HashMap<usize, Rc<RefCell<Node>>>) -> Self {
         Self {
             row_count,
             nodes,
@@ -83,8 +86,22 @@ impl LogicBuilder {
     }
 
     pub(crate) fn default() -> Self {
+        const DEFAULT_SCRIPT: &str = r#"
+        let node_count = || 7;
+        let byte_size = || 56;
+        let get_node = |index| "u64";
+        let get_offset = |index| index * 8;
+        
+        #{
+            node_count: node_count,
+            byte_size: byte_size,
+            get_node: get_node,
+            get_offset: get_offset
+        }
+        "#;
+
         Self {
-            script: "\"u64, u64, u64, u64, u64, u64, u64\"".to_string(),
+            script: DEFAULT_SCRIPT.to_string(),
             name: None,
         }
     }
