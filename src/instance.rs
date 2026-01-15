@@ -354,6 +354,12 @@ impl NodeInstance {
                         .borrow_mut()
                         .response(PaneResponse::OpenScript(logic_instance.definition()));
                 }
+
+                if ui.button("Scratch").clicked() {
+                    state
+                        .borrow_mut()
+                        .response(PaneResponse::OpenScratch(logic_instance.definition()));
+                }
             },
         );
         collapsing

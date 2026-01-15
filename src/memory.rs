@@ -314,4 +314,22 @@ impl RhaiMemory {
         unsafe { (*(*self.inner.borrow_mut())).get(address as usize, &mut buffer) }
         String::from_utf8_lossy(&buffer).to_string()
     }
+
+    pub fn read_zero_terminated_string(&mut self, address: i64, max_len: i64) -> String {
+        let mut buffer = vec![];
+
+        let mut address = address as usize;
+        let max_len = max_len as usize;
+
+        while buffer.len() < max_len {
+            let byte = unsafe { (*(*self.inner.borrow_mut())).read(address) };
+            if byte == 0 {
+                break;
+            }
+            buffer.push(byte);
+            address += 1;
+        }
+
+        String::from_utf8_lossy(&buffer).to_string()
+    }
 }

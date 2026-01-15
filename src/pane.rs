@@ -29,6 +29,9 @@ pub enum Pane {
     ScriptEditor {
         logic: Weak<RefCell<Logic>>,
     },
+    Scratch {
+        logic: Weak<RefCell<Logic>>,
+    },
 }
 
 pub enum RegistryListResponse {
@@ -348,7 +351,7 @@ impl Pane {
                 };
 
                 let name = logic.borrow().name.clone();
-                ui.heading(format!("Script: {}", name));
+                ui.heading(format!("Script {}", name));
 
                 ui.separator();
 
@@ -372,6 +375,27 @@ impl Pane {
                     }
                 });
             }
+            Pane::Scratch { logic } => {
+                let Some(logic) = logic.upgrade() else {
+                    ui.heading("Script not found");
+                    return;
+                };
+
+                let logic_id = logic.borrow().id;
+                let name = logic.borrow().name.clone();
+
+                ui.heading(format!("Scratch: {}", name));
+                ui.separator();
+
+                if let Some(content) = state.borrow().scratch_pad.get(logic_id) {
+                    ScrollArea::both().show(ui, |ui| {
+                        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                        ui.label(content);
+                    });
+                } else {
+                    ui.label("(no output)");
+                }
+            }
         }
     }
 
@@ -388,12 +412,14 @@ impl Pane {
             Pane::StructList => "Struct list".into(),
             Pane::ProcessList { matching: _ } => "Process list".into(),
             Pane::ScriptList => "Script list".into(),
-            Pane::ScriptEditor { logic } => {
-                logic
-                    .upgrade()
-                    .map(|l| format!("Script: {}", l.borrow().name))
-                    .unwrap_or_else(|| "Script not found".into())
-            }
+            Pane::ScriptEditor { logic } => logic
+                .upgrade()
+                .map(|l| format!("Script: {}", l.borrow().name))
+                .unwrap_or_else(|| "Script not found".into()),
+            Pane::Scratch { logic } => logic
+                .upgrade()
+                .map(|l| format!("Scratch: {}", l.borrow().name))
+                .unwrap_or_else(|| "Scratch".into()),
         }
     }
 }
@@ -405,6 +431,7 @@ pub enum PaneResponse {
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
     OpenScript(Rc<RefCell<Logic>>),
+    OpenScratch(Rc<RefCell<Logic>>),
     ProcessSelected(Process),
     AddChild(AddChild),
     StructResponse(StructResponse),
@@ -426,6 +453,7 @@ pub enum AddChild {
     ProcessList,
     ScriptList,
     ScriptEditor(Rc<RefCell<Logic>>),
+    Scratch(Rc<RefCell<Logic>>),
 }
 
 #[derive(Debug)]

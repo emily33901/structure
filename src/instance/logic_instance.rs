@@ -27,12 +27,22 @@ pub struct LogicCallbacks {
 }
 
 impl LogicCallbacks {
-    pub fn new(script: &str, address: usize, state: &RefCell<State>) -> Result<Self> {
+    pub fn new(
+        script: &str,
+        address: usize,
+        logic_id: RegistryId,
+        state: &RefCell<State>,
+    ) -> Result<Self> {
         let (ast, callbacks) = {
             let mut state = state.borrow_mut();
-            match state
-                .script_engine
-                .compile_logic_script(&script, address, state.memory)
+            // Need to reborrow fields to satisfy borrow checker
+            let State {
+                memory,
+                scratch_pad,
+                script_engine,
+                ..
+            } = &mut *state;
+            match script_engine.compile_logic_script(script, address, *memory, logic_id, *scratch_pad)
             {
                 Ok(ok) => ok,
                 Err(err) => bail!("failed to evaluate script: {err:#?}"),
@@ -98,7 +108,9 @@ impl LogicInstance {
         offset_in_parent: usize,
         state: &RefCell<State>,
     ) -> Self {
-        let callbacks = LogicCallbacks::new(&definition.borrow().script, address, state);
+        let logic_id = definition.borrow().id;
+        let callbacks =
+            LogicCallbacks::new(&definition.borrow().script, address, logic_id, state);
 
         Self {
             definition,

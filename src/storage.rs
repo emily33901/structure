@@ -92,6 +92,9 @@ mod v1 {
         ScriptEditor {
             logic: RegistryId,
         },
+        Scratch {
+            logic: RegistryId,
+        },
     }
 
     #[derive(Serialize, Deserialize)]
@@ -206,6 +209,14 @@ mod v1 {
                             .logics
                             .get(logic)
                             .map(|l| crate::Pane::ScriptEditor {
+                                logic: Rc::downgrade(l),
+                            })
+                    }
+                    Pane::Scratch { logic } => {
+                        registry
+                            .logics
+                            .get(logic)
+                            .map(|l| crate::Pane::Scratch {
                                 logic: Rc::downgrade(l),
                             })
                     }
@@ -434,6 +445,11 @@ impl v1::Layout {
                 crate::Pane::ScriptList => Some(v1::Pane::ScriptList),
                 crate::Pane::ScriptEditor { logic } => {
                     logic.upgrade().map(|l| v1::Pane::ScriptEditor {
+                        logic: registry.logic_id(&l).unwrap(),
+                    })
+                }
+                crate::Pane::Scratch { logic } => {
+                    logic.upgrade().map(|l| v1::Pane::Scratch {
                         logic: registry.logic_id(&l).unwrap(),
                     })
                 }

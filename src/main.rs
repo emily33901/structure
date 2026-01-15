@@ -11,6 +11,7 @@ use rtti::RttiCache;
 use script::ScriptEngine;
 
 use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse, StructResponse};
+use crate::scratch::ScratchPad;
 
 pub mod definition;
 pub mod instance;
@@ -22,6 +23,7 @@ mod process;
 mod project;
 mod registry;
 mod rtti;
+mod scratch;
 mod script;
 mod storage;
 pub mod ui;
@@ -257,6 +259,7 @@ pub struct State<'a> {
     script_engine: &'a ScriptEngine,
     processes: &'a [Process],
     process: Option<&'a Process>,
+    scratch_pad: &'a mut ScratchPad,
 
     this_frame: Option<FrameState>,
     last_frame: &'a FrameState,
@@ -292,6 +295,7 @@ struct App {
     rtti: RttiCache,
     script_engine: ScriptEngine,
     processes: Vec<Process>,
+    scratch_pad: ScratchPad,
 
     test: Box<Test>,
 
@@ -318,6 +322,7 @@ impl Default for App {
             processes: Default::default(),
             rtti: Default::default(),
             script_engine: Default::default(),
+            scratch_pad: Default::default(),
             this_frame: Default::default(),
         }
     }
@@ -343,7 +348,7 @@ impl App {
 
         fonts.font_data.insert(
             "NotoSansMono".to_owned(),
-            egui::FontData::from_static(include_bytes!("../resource/NotoSansMono-Regular.ttf")),
+            egui::FontData::from_static(include_bytes!("../resource/JetBrainsMono-Regular.ttf")),
         );
 
         fonts
@@ -418,6 +423,11 @@ impl App {
                     state.borrow_mut().registry,
                     from,
                     AddChild::ScriptEditor(logic),
+                ),
+                PaneResponse::OpenScratch(logic) => layout.add_child(
+                    state.borrow_mut().registry,
+                    from,
+                    AddChild::Scratch(logic),
                 ),
                 PaneResponse::ProcessSelected(new_process) => {
                     *unhandled_response = Some((from, PaneResponse::ProcessSelected(new_process)))
@@ -508,6 +518,7 @@ impl eframe::App for App {
                 script_engine: &self.script_engine,
                 processes: self.processes.as_slice(),
                 process: self.process.as_ref(),
+                scratch_pad: &mut self.scratch_pad,
 
                 test: &self.test,
                 last_frame: &self.this_frame,
