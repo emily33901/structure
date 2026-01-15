@@ -8,7 +8,7 @@ use crate::{Address, instance::StructInstance};
 use crate::{
     State,
     definition::{Logic, Struct},
-    node::{StructAction, StructUiFlags},
+    node::{Action, StructUiFlags},
 };
 use crate::{definition::Node, registry::RegistryId};
 use crate::{instance::Location, process::Process};
@@ -435,6 +435,7 @@ pub enum PaneResponse {
     ProcessSelected(Process),
     AddChild(AddChild),
     StructResponse(StructResponse),
+    LogicResponse(LogicResponse),
     Close,
 }
 
@@ -442,7 +443,7 @@ pub enum PaneResponse {
 pub enum AddressResponse {
     AddressStruct(Option<Rc<RefCell<Address>>>, Option<Rc<RefCell<Struct>>>),
     Replace(Rc<RefCell<Struct>>),
-    Action(StructAction),
+    Action(Action),
 }
 
 #[derive(Debug)]
@@ -457,6 +458,11 @@ pub enum AddChild {
 }
 
 #[derive(Debug)]
+pub enum LogicResponse {
+    Replace(Weak<RefCell<Node>>, Weak<RefCell<Logic>>),
+}
+
+#[derive(Debug)]
 pub enum StructResponse {
     Replace(Weak<RefCell<Node>>, Weak<RefCell<Struct>>),
 }
@@ -467,8 +473,8 @@ impl From<AddressResponse> for PaneResponse {
     }
 }
 
-impl From<StructAction> for PaneResponse {
-    fn from(val: StructAction) -> Self {
+impl From<Action> for PaneResponse {
+    fn from(val: Action) -> Self {
         PaneResponse::AddressStructResponse(AddressResponse::Action(val))
     }
 }
@@ -476,5 +482,11 @@ impl From<StructAction> for PaneResponse {
 impl From<StructResponse> for PaneResponse {
     fn from(value: StructResponse) -> Self {
         PaneResponse::StructResponse(value)
+    }
+}
+
+impl From<LogicResponse> for PaneResponse {
+    fn from(value: LogicResponse) -> Self {
+        PaneResponse::LogicResponse(value)
     }
 }

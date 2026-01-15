@@ -11,7 +11,7 @@ use rtti::RttiCache;
 use script::ScriptEngine;
 
 use crate::instance::{Location, LogicInstance};
-use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse, StructResponse};
+use crate::pane::{AddChild, AddressResponse, LogicResponse, Pane, PaneResponse, StructResponse};
 use crate::scratch::ScratchPad;
 
 pub mod definition;
@@ -452,6 +452,19 @@ impl App {
                         definition::Node::Pointer(weak) =>  {
                             *weak = weak_struct;
                         },
+                        _ => unreachable!()
+                    }
+                }
+
+                PaneResponse::LogicResponse(LogicResponse::Replace(weak_node, weak_logic)) => {
+                    let Some(node) = weak_node.upgrade() else {
+                        return;
+                    };
+
+                    match &mut *node.borrow_mut() {
+                        definition::Node::Logic(weak) => {
+                            *weak = weak_logic;
+                        }
                         _ => unreachable!()
                     }
                 }

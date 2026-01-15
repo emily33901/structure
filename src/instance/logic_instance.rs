@@ -4,15 +4,17 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use egui::collapsing_header::CollapsingState;
 use egui::{Align, Layout};
+use egui::{collapsing_header::CollapsingState, vec2};
 use egui_extras::Column;
 use rhai::Dynamic;
 
 use crate::{
     State,
     definition::{Logic, Node},
+    pane::LogicResponse,
     registry::RegistryId,
+    ui,
 };
 
 use super::{Location, NodeInstance};
@@ -42,8 +44,13 @@ impl LogicCallbacks {
                 script_engine,
                 ..
             } = &mut *state;
-            match script_engine.compile_logic_script(script, address, *memory, logic_id, *scratch_pad)
-            {
+            match script_engine.compile_logic_script(
+                script,
+                address,
+                *memory,
+                logic_id,
+                *scratch_pad,
+            ) {
                 Ok(ok) => ok,
                 Err(err) => bail!("failed to evaluate script: {err:#?}"),
             }
@@ -92,6 +99,7 @@ pub struct LogicInstance {
     pub(super) offset_in_parent: usize,
     pub(super) location: Location,
     definition: Rc<RefCell<Logic>>,
+    parent_node: Rc<RefCell<Node>>,
 
     // Script evaluation results
     callbacks: Result<LogicCallbacks>,
@@ -107,10 +115,10 @@ impl LogicInstance {
         location: Location,
         offset_in_parent: usize,
         state: &RefCell<State>,
+        parent_node: Rc<RefCell<Node>>,
     ) -> Self {
         let logic_id = definition.borrow().id;
-        let callbacks =
-            LogicCallbacks::new(&definition.borrow().script, address, logic_id, state);
+        let callbacks = LogicCallbacks::new(&definition.borrow().script, address, logic_id, state);
 
         Self {
             definition,
@@ -119,6 +127,7 @@ impl LogicInstance {
             address,
             callbacks,
             cached_nodes: Default::default(),
+            parent_node,
         }
     }
 
@@ -169,7 +178,7 @@ impl LogicInstance {
         nodes
     }
 
-    fn row_heights<'instance, 'state, 'state_owner>(
+    pub(super) fn row_heights<'instance, 'state, 'state_owner>(
         &'instance self,
         ctx: egui::Context,
         state: &'state RefCell<State<'state_owner>>,
@@ -246,9 +255,53 @@ impl LogicInstance {
                 });
         });
     }
+
+    pub(crate) fn heading(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), ui::NODE_UNIT_ROW_HEIGHT),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                let self_name = self.name();
+                let self_id = self.id();
+
+                egui::ComboBox::new((self.ui_id(), "logic-replace-combo-box"), "")
+                    .selected_text(&*self_name)
+                    .show_ui(ui, |ui| {
+                        let mut state = state.borrow_mut();
+                        for (id, other_logic) in state.registry.logics.clone() {
+                            let other_logic_name = other_logic.borrow().name.clone();
+                            if ui
+                                .add(
+                                    egui::Button::new(format!("{} ({id})", other_logic_name))
+                                        .selected(id == self_id),
+                                )
+                                .clicked()
+                            {
+                                state.response(LogicResponse::Replace(
+                                    Rc::downgrade(&self.parent_node),
+                                    Rc::downgrade(&other_logic),
+                                ))
+                            }
+                        }
+
+                        ui.separator();
+
+                        if ui.button("New struct".to_string()).clicked() {
+                            let default_logic = state.registry.default_logic();
+                            state.response(LogicResponse::Replace(
+                                Rc::downgrade(&self.parent_node),
+                                Rc::downgrade(&default_logic),
+                            ))
+                        }
+                    });
+
+                ui.end_row();
+            },
+        );
+    }
 }
 
-struct LogicRowHeightIterator<'instance, 'state, 'state_owner> {
+pub(super) struct LogicRowHeightIterator<'instance, 'state, 'state_owner> {
     ctx: egui::Context,
     logic: &'instance LogicInstance,
     nodes: Vec<(usize, Rc<RefCell<Node>>)>,

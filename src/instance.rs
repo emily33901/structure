@@ -97,8 +97,8 @@ impl NodeInstance {
         let location = self.location.progress(self.offset_in_parent);
 
         {
-            let state_ref = state.borrow();
-            if let Some(frame) = &state_ref.this_frame {
+            let state = state.borrow();
+            if let Some(frame) = &state.this_frame {
                 if let Some(cached) = frame.logic_instance_cache.get(&location) {
                     return Some(cached.clone());
                 }
@@ -111,6 +111,7 @@ impl NodeInstance {
             location.clone(),
             self.offset_in_parent,
             state,
+            self.definition.clone(),
         ));
 
         state
@@ -150,46 +151,29 @@ impl NodeInstance {
     }
 
     pub fn height(&self, item_spacing_y: f32, ctx: &egui::Context, state: &RefCell<State>) -> f32 {
-        // Check if this is a logic node - logic nodes support collapsing
+        // TODO(emily): This is sad, we would probably like to combine more of this code for both logic and structs.
+        // but because the iterator types are different I can't be bothered right now.
         if let Some(logic_instance) = self.logic_instance(state) {
             let collapsing = logic_instance.collapsing(ctx);
-
-            // Header size with extra padding (same as structs)
-            let extra = 16.0 + item_spacing_y;
-
-            let openness = collapsing.openness(ctx);
-
-            if openness == 0.0 {
-                return extra; // Just header when collapsed
-            }
-
-            // Calculate total height of all evaluated nodes
-            let nodes = logic_instance.evaluate(state);
-            let content_height: f32 = nodes
-                .iter()
-                .enumerate()
-                .map(|(_idx, (offset, node))| {
-                    let node_instance = NodeInstance::new(
-                        logic_instance.address,
-                        *offset,
-                        logic_instance.location.progress(*offset),
-                        node.clone(),
-                    );
-                    node_instance.height(item_spacing_y, ctx, state) + item_spacing_y
-                })
-                .sum();
-
-            return content_height * openness + extra;
+            let row_heights = logic_instance.row_heights(ctx.clone(), state, item_spacing_y);
+            return Self::collapsible_height(item_spacing_y, ctx, collapsing, row_heights);
         }
 
         let Some(struct_instance) = self.struct_instance(state) else {
             return ui::NODE_UNIT_ROW_HEIGHT;
         };
 
-        let item_spacing_y = item_spacing_y;
-
         let collapsing = struct_instance.collapsing(ctx);
+        let row_heights = struct_instance.row_heights(item_spacing_y, ctx, state);
+        Self::collapsible_height(item_spacing_y, ctx, collapsing, row_heights)
+    }
 
+    fn collapsible_height(
+        item_spacing_y: f32,
+        ctx: &egui::Context,
+        collapsing: CollapsingState,
+        row_heights: impl Iterator<Item = f32>,
+    ) -> f32 {
         // NOTE(emily): Here we account for the extra padding in the egui table.
         let extra = 16.0 + item_spacing_y;
 
@@ -199,12 +183,9 @@ impl NodeInstance {
             return extra;
         }
 
-        let height: f32 = struct_instance
-            .row_heights(item_spacing_y, ctx, state)
-            .map(|x| x + item_spacing_y)
-            .sum();
+        let content_height: f32 = row_heights.map(|h| h + item_spacing_y).sum();
 
-        height * openness + extra
+        content_height * openness + extra
     }
 
     pub(crate) fn heading_offset_and_address_inner<F: FnOnce(&mut egui::Ui)>(
@@ -367,7 +348,8 @@ impl NodeInstance {
 
                 ui.add_space(ui::spacing(ui));
 
-                // Display logic name
+                logic_instance.heading(ui, state);
+
                 let logic_name = logic_instance.name();
                 ui.label(&*logic_name);
 

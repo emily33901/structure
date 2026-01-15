@@ -83,30 +83,18 @@ pub struct LogicBuilder {
     pub(crate) name: Option<String>,
 }
 
-impl LogicBuilder {
-    pub(crate) fn new(script: String) -> Self {
-        Self { script, name: None }
-    }
-
-    pub(crate) fn default() -> Self {
-        const DEFAULT_SCRIPT: &str = r#"
-        let node_count = || 7;
-        let byte_size = || 56;
-        let get_node = |index| "u64";
-        let get_offset = |index| index * 8;
-        
-        #{
-            node_count: node_count,
-            byte_size: byte_size,
-            get_node: get_node,
-            get_offset: get_offset
-        }
-        "#;
-
+impl Default for LogicBuilder {
+    fn default() -> Self {
         Self {
             script: DEFAULT_SCRIPT.to_string(),
             name: None,
         }
+    }
+}
+
+impl LogicBuilder {
+    pub(crate) fn new(script: String) -> Self {
+        Self { script, name: None }
     }
 
     pub(crate) fn name(self, name: &str) -> Self {
@@ -184,3 +172,38 @@ fn node_none_byte_size_rules(bytes: usize) -> usize {
         unreachable!()
     }
 }
+
+const DEFAULT_SCRIPT: &str = r#"
+// first node is a byte that indicates whether it is a short string or not
+
+let byte_size = || 40;
+
+let is_short_string = memory.read_u8(address) == 0;
+
+let nodes = if is_short_string {
+    [
+        make_comment(0, "short string"),
+        make_utf8(8, 16),
+        make_comment(24, "length"),
+        make_u64(24),
+        make_comment(32, "capacity"),
+        make_u64(32),
+    ]
+} else {
+    [
+        make_comment(0, "long string"),
+        make_pointer_utf8(8),
+        make_comment(24, "length"),
+        make_u64(24),
+        make_comment(32, "capacity"),
+        make_u64(32),
+    ]
+};
+
+let nodes = || nodes;
+
+#{
+    byte_size: byte_size,
+    nodes: nodes,
+}
+"#;

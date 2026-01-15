@@ -9,7 +9,7 @@ use egui::{Align, Layout, vec2};
 use crate::{
     Address, State,
     definition::{Node, Struct},
-    node::{StructAction, StructUiFlags},
+    node::{Action, StructUiFlags},
     pane::{AddressResponse, StructResponse},
     registry::RegistryId,
     ui::{self, NODE_UNIT_ROW_HEIGHT},
@@ -162,7 +162,7 @@ impl StructInstance {
                     .changed()
                 {
                     // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
-                    state.borrow_mut().response(StructAction::new({
+                    state.borrow_mut().response(Action::new({
                         let definition = self.definition.clone();
                         move |_| {
                             definition.borrow_mut().row_count = row_count;
@@ -269,7 +269,7 @@ impl StructInstance {
                 });
 
             if let Some(action) = action {
-                state.borrow_mut().response(StructAction::new({
+                state.borrow_mut().response(Action::new({
                     let definition = self.definition.clone();
                     move |_registry| {
                         let mut definition = definition.borrow_mut();
