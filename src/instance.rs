@@ -87,10 +87,7 @@ impl NodeInstance {
 
     fn logic_instance(&self, state: &RefCell<State>) -> Option<Rc<LogicInstance>> {
         let definition = match &*self.definition.borrow() {
-            Node::Logic(logic) => {
-                let logic = logic.upgrade()?;
-                logic
-            }
+            Node::Logic(logic) => logic.upgrade()?,
             _ => return None,
         };
 
@@ -98,10 +95,10 @@ impl NodeInstance {
 
         {
             let state = state.borrow();
-            if let Some(frame) = &state.this_frame {
-                if let Some(cached) = frame.logic_instance_cache.get(&location) {
-                    return Some(cached.clone());
-                }
+            if let Some(frame) = &state.this_frame
+                && let Some(cached) = frame.logic_instance_cache.get(&location)
+            {
+                return Some(cached.clone());
             }
         }
 

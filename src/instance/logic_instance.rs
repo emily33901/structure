@@ -44,13 +44,8 @@ impl LogicCallbacks {
                 script_engine,
                 ..
             } = &mut *state;
-            match script_engine.compile_logic_script(
-                script,
-                address,
-                *memory,
-                logic_id,
-                *scratch_pad,
-            ) {
+            match script_engine.compile_logic_script(script, address, memory, logic_id, scratch_pad)
+            {
                 Ok(ok) => ok,
                 Err(err) => bail!("failed to evaluate script: {err:#?}"),
             }

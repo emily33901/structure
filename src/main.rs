@@ -228,7 +228,9 @@ impl<'a, 'b> egui_tiles::Behavior<Pane> for TreeBehavior<'a, 'b> {
         });
 
         if let Some(add_child) = response {
-            self.state.borrow_mut().response_with_tile_id(tile_id, PaneResponse::AddChild(add_child))
+            self.state
+                .borrow_mut()
+                .response_with_tile_id(tile_id, PaneResponse::AddChild(add_child))
         }
     }
 }
@@ -278,7 +280,7 @@ impl<'a> State<'a> {
         self.this_frame_mut().response(new_response);
     }
 
-    fn response_with_tile_id(&mut self, tile_id: TileId, new_response: impl Into<PaneResponse>) {
+    fn response_with_tile_id(&mut self, _tile_id: TileId, new_response: impl Into<PaneResponse>) {
         self.this_frame_mut().response(new_response);
     }
 
@@ -402,9 +404,10 @@ impl App {
                     );
                 }
                 PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
-                    *unhandled_response = Some((from, PaneResponse::AddressStructResponse(
-                        AddressResponse::Replace(new_s),
-                    )));
+                    *unhandled_response = Some((
+                        from,
+                        PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)),
+                    ));
                 }
                 PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
                     action.call(state);
@@ -426,11 +429,9 @@ impl App {
                     from,
                     AddChild::ScriptEditor(logic),
                 ),
-                PaneResponse::OpenScratch(logic) => layout.add_child(
-                    state.borrow_mut().registry,
-                    from,
-                    AddChild::Scratch(logic),
-                ),
+                PaneResponse::OpenScratch(logic) => {
+                    layout.add_child(state.borrow_mut().registry, from, AddChild::Scratch(logic))
+                }
                 PaneResponse::ProcessSelected(new_process) => {
                     *unhandled_response = Some((from, PaneResponse::ProcessSelected(new_process)))
                 }
@@ -446,13 +447,13 @@ impl App {
                     };
 
                     match &mut *node.borrow_mut() {
-                        definition::Node::Struct(weak) =>  {
+                        definition::Node::Struct(weak) => {
                             *weak = weak_struct;
-                        },
-                        definition::Node::Pointer(weak) =>  {
+                        }
+                        definition::Node::Pointer(weak) => {
                             *weak = weak_struct;
-                        },
-                        _ => unreachable!()
+                        }
+                        _ => unreachable!(),
                     }
                 }
 
@@ -465,7 +466,7 @@ impl App {
                         definition::Node::Logic(weak) => {
                             *weak = weak_logic;
                         }
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -563,7 +564,7 @@ impl eframe::App for App {
             match unhandled_response {
                 Some((_from, PaneResponse::ProcessSelected(new_process))) => {
                     self.process_changed(new_process);
-                } 
+                }
                 Some((from, PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)))) => {
                     let egui_tiles::Tile::Pane(pane) =
                         self.project.layout.tree.tiles.get_mut(from).unwrap()

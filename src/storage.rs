@@ -213,12 +213,9 @@ mod v1 {
                             })
                     }
                     Pane::Scratch { logic } => {
-                        registry
-                            .logics
-                            .get(logic)
-                            .map(|l| crate::Pane::Scratch {
-                                logic: Rc::downgrade(l),
-                            })
+                        registry.logics.get(logic).map(|l| crate::Pane::Scratch {
+                            logic: Rc::downgrade(l),
+                        })
                     }
                 }),
             };
@@ -448,11 +445,9 @@ impl v1::Layout {
                         logic: registry.logic_id(&l).unwrap(),
                     })
                 }
-                crate::Pane::Scratch { logic } => {
-                    logic.upgrade().map(|l| v1::Pane::Scratch {
-                        logic: registry.logic_id(&l).unwrap(),
-                    })
-                }
+                crate::Pane::Scratch { logic } => logic.upgrade().map(|l| v1::Pane::Scratch {
+                    logic: registry.logic_id(&l).unwrap(),
+                }),
             }),
         };
 
