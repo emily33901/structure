@@ -65,6 +65,13 @@ impl Layout {
             AddChild::ProcessList => Pane::ProcessList {
                 matching: "".into(),
             },
+            AddChild::ScriptList => Pane::ScriptList,
+            AddChild::ScriptEditor(logic) => Pane::ScriptEditor {
+                logic: Rc::downgrade(&logic),
+            },
+            AddChild::Scratch(logic) => Pane::Scratch {
+                logic: Rc::downgrade(&logic),
+            },
         });
 
         // Find some parent tabs to insert this into

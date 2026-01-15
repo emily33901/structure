@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use egui::{Theme, vec2};
 use egui_tiles::{Tile, TileId, Tiles};
@@ -8,8 +8,11 @@ use process::{OpenProcess, Process};
 use project::{Layout, Project};
 use registry::Registry;
 use rtti::RttiCache;
+use script::ScriptEngine;
 
-use crate::pane::{AddChild, AddressResponse, Pane, PaneResponse};
+use crate::instance::{Location, LogicInstance};
+use crate::pane::{AddChild, AddressResponse, LogicResponse, Pane, PaneResponse, StructResponse};
+use crate::scratch::ScratchPad;
 
 pub mod definition;
 pub mod instance;
@@ -21,6 +24,8 @@ mod process;
 mod project;
 mod registry;
 mod rtti;
+mod scratch;
+mod script;
 mod storage;
 pub mod ui;
 
@@ -85,7 +90,6 @@ struct TreeBehaviorOptions {
     simplification_options: egui_tiles::SimplificationOptions,
     tab_bar_height: f32,
     gap_width: f32,
-    pane_response: Option<(TileId, PaneResponse)>,
 }
 
 impl Default for TreeBehaviorOptions {
@@ -97,7 +101,6 @@ impl Default for TreeBehaviorOptions {
             },
             tab_bar_height: 24.0,
             gap_width: 4.0,
-            pane_response: None,
         }
     }
 }
@@ -219,10 +222,15 @@ impl<'a, 'b> egui_tiles::Behavior<Pane> for TreeBehavior<'a, 'b> {
             if ui.button("Process list").clicked() {
                 response = Some(AddChild::ProcessList);
             }
+            if ui.button("Script list").clicked() {
+                response = Some(AddChild::ScriptList);
+            }
         });
 
         if let Some(add_child) = response {
-            self.options.pane_response = Some((tile_id, PaneResponse::AddChild(add_child)));
+            self.state
+                .borrow_mut()
+                .response_with_tile_id(tile_id, PaneResponse::AddChild(add_child))
         }
     }
 }
@@ -233,6 +241,7 @@ pub struct FrameState {
     current_tile_id: Option<TileId>,
     highlighted_address: Option<usize>,
     response: Option<(TileId, PaneResponse)>,
+    logic_instance_cache: HashMap<Location, Rc<LogicInstance>>,
 }
 
 impl FrameState {
@@ -251,8 +260,10 @@ pub struct State<'a> {
     sections: &'a [Section],
     modules: &'a [Module],
     rtti: &'a mut RttiCache,
+    script_engine: &'a ScriptEngine,
     processes: &'a [Process],
     process: Option<&'a Process>,
+    scratch_pad: &'a mut ScratchPad,
 
     this_frame: Option<FrameState>,
     last_frame: &'a FrameState,
@@ -269,6 +280,10 @@ impl<'a> State<'a> {
         self.this_frame_mut().response(new_response);
     }
 
+    fn response_with_tile_id(&mut self, _tile_id: TileId, new_response: impl Into<PaneResponse>) {
+        self.this_frame_mut().response(new_response);
+    }
+
     fn take_this_frame(&mut self) -> FrameState {
         self.this_frame.take().unwrap()
     }
@@ -282,7 +297,9 @@ struct App {
     sections: Option<Vec<Section>>,
     modules: Option<Vec<Module>>,
     rtti: RttiCache,
+    script_engine: ScriptEngine,
     processes: Vec<Process>,
+    scratch_pad: ScratchPad,
 
     test: Box<Test>,
 
@@ -308,6 +325,8 @@ impl Default for App {
             tree_options: Default::default(),
             processes: Default::default(),
             rtti: Default::default(),
+            script_engine: Default::default(),
+            scratch_pad: Default::default(),
             this_frame: Default::default(),
         }
     }
@@ -316,6 +335,12 @@ impl Default for App {
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         cc.egui_ctx.set_theme(Theme::Dark);
+
+        // #[cfg(debug_assertions)]
+        // cc.egui_ctx.style_mut(|style| {
+        //     style.debug.debug_on_hover = true;
+        //     style.debug.hover_shows_next = true;
+        // });
 
         // cc.egui_ctx.set_debug_on_hover(true);
 
@@ -327,7 +352,7 @@ impl App {
 
         fonts.font_data.insert(
             "NotoSansMono".to_owned(),
-            egui::FontData::from_static(include_bytes!("../resource/NotoSansMono-Regular.ttf")),
+            egui::FontData::from_static(include_bytes!("../resource/JetBrainsMono-Regular.ttf")),
         );
 
         fonts
@@ -379,9 +404,10 @@ impl App {
                     );
                 }
                 PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)) => {
-                    *unhandled_response = Some((from, PaneResponse::AddressStructResponse(
-                        AddressResponse::Replace(new_s),
-                    )));
+                    *unhandled_response = Some((
+                        from,
+                        PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)),
+                    ));
                 }
                 PaneResponse::AddressStructResponse(AddressResponse::Action(action)) => {
                     action.call(state);
@@ -398,6 +424,14 @@ impl App {
                     from,
                     AddChild::AddressStruct(Some(s), None),
                 ),
+                PaneResponse::OpenScript(logic) => layout.add_child(
+                    state.borrow_mut().registry,
+                    from,
+                    AddChild::ScriptEditor(logic),
+                ),
+                PaneResponse::OpenScratch(logic) => {
+                    layout.add_child(state.borrow_mut().registry, from, AddChild::Scratch(logic))
+                }
                 PaneResponse::ProcessSelected(new_process) => {
                     *unhandled_response = Some((from, PaneResponse::ProcessSelected(new_process)))
                 }
@@ -406,6 +440,34 @@ impl App {
                 }
                 PaneResponse::Close => {
                     eprintln!("Ignoring close");
+                }
+                PaneResponse::StructResponse(StructResponse::Replace(weak_node, weak_struct)) => {
+                    let Some(node) = weak_node.upgrade() else {
+                        return;
+                    };
+
+                    match &mut *node.borrow_mut() {
+                        definition::Node::Struct(weak) => {
+                            *weak = weak_struct;
+                        }
+                        definition::Node::Pointer(weak) => {
+                            *weak = weak_struct;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                PaneResponse::LogicResponse(LogicResponse::Replace(weak_node, weak_logic)) => {
+                    let Some(node) = weak_node.upgrade() else {
+                        return;
+                    };
+
+                    match &mut *node.borrow_mut() {
+                        definition::Node::Logic(weak) => {
+                            *weak = weak_logic;
+                        }
+                        _ => unreachable!(),
+                    }
                 }
             }
         }
@@ -469,8 +531,10 @@ impl eframe::App for App {
                 sections: self.sections.as_deref().unwrap_or(&[]),
                 modules: self.modules.as_deref().unwrap_or(&[]),
                 rtti: &mut self.rtti,
+                script_engine: &self.script_engine,
                 processes: self.processes.as_slice(),
                 process: self.process.as_ref(),
+                scratch_pad: &mut self.scratch_pad,
 
                 test: &self.test,
                 last_frame: &self.this_frame,
@@ -500,7 +564,7 @@ impl eframe::App for App {
             match unhandled_response {
                 Some((_from, PaneResponse::ProcessSelected(new_process))) => {
                     self.process_changed(new_process);
-                } 
+                }
                 Some((from, PaneResponse::AddressStructResponse(AddressResponse::Replace(new_s)))) => {
                     let egui_tiles::Tile::Pane(pane) =
                         self.project.layout.tree.tiles.get_mut(from).unwrap()

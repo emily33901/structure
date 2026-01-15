@@ -1,4 +1,8 @@
-use std::{cell::RefCell, mem::MaybeUninit};
+use std::{
+    cell::{RefCell, RefMut},
+    mem::MaybeUninit,
+    rc::Rc,
+};
 
 use anyhow::Result;
 use egui::{Color32, RichText, ahash::HashMap};
@@ -96,15 +100,14 @@ pub(crate) fn disect_address(state: &RefCell<State>, address: usize, ui: &mut eg
     }
 
     if r.clicked() {
-        state.borrow_mut().response(AddressResponse::AddressStruct(
-            Some(
-                state
-                    .borrow_mut()
-                    .registry
-                    .find_or_register_address(address.into()),
-            ),
-            None,
-        ));
+        let address = state
+            .borrow_mut()
+            .registry
+            .find_or_register_address(address.into());
+
+        state
+            .borrow_mut()
+            .response(AddressResponse::AddressStruct(Some(address), None));
     }
 
     if let Some(rtti) = rtti_if_address_is_vtable(&mut state.borrow_mut(), address) {
@@ -122,6 +125,7 @@ pub(crate) fn disect_bytes(state: &RefCell<State>, bytes: &[u8], ui: &mut egui::
 
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add(egui::Label::new(RichText::new(format!("{}", value))));
+        ui.add(egui::Label::new(RichText::new(format!("0x{:X}", value))));
 
         if value == 0 {
             return;
@@ -141,7 +145,7 @@ pub(crate) fn highlightable_address_text(
     if let Some(highlighted_address) = state.borrow().last_frame.highlighted_address
         && highlighted_address == address
     {
-        eprintln!("address highlighted");
+        println!("address highlighted");
         text = text.background_color(Color32::DARK_RED);
     }
 
@@ -274,5 +278,66 @@ impl std::io::Read for MemoryReader<'_> {
         let read_len = buf.len().min(self.range.end - pos);
         self.memory.get(pos, buf);
         Ok(read_len)
+    }
+}
+
+// TODO(emily): Gross interior mutability hack to appease Rhai, since it doesn't (rightfully) understand
+// lifetimes, so we store a raw mut pointer to it here. This is dangerous, but memory should always live longer than
+// us.
+#[derive(Clone)]
+pub struct RhaiMemory {
+    inner: Rc<RefCell<*mut Memory<'static>>>,
+}
+
+impl RhaiMemory {
+    pub fn new(memory: &mut Memory) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(memory as *mut _ as *mut Memory<'static>)),
+        }
+    }
+
+    pub fn inner<'a>(&'a self) -> RefMut<'a, Memory<'static>> {
+        RefMut::map(self.inner.borrow_mut(), |&mut zelf| unsafe { &mut *zelf })
+    }
+
+    pub fn read_u8(&mut self, address: i64) -> i64 {
+        self.inner().read::<u8>(address as usize) as i64
+    }
+
+    pub fn read_u16(&mut self, address: i64) -> i64 {
+        self.inner().read::<u16>(address as usize) as i64
+    }
+
+    pub fn read_u32(&mut self, address: i64) -> i64 {
+        self.inner().read::<u32>(address as usize) as i64
+    }
+
+    pub fn read_u64(&mut self, address: i64) -> i64 {
+        self.inner().read::<u64>(address as usize) as i64
+    }
+
+    pub fn read_string(&mut self, address: i64, len: i64) -> String {
+        let len = len as usize;
+        let mut buffer = vec![0_u8; len];
+        self.inner().get(address as usize, &mut buffer);
+        String::from_utf8_lossy(&buffer).to_string()
+    }
+
+    pub fn read_zero_terminated_string(&mut self, address: i64, max_len: i64) -> String {
+        let mut buffer = vec![];
+
+        let mut address = address as usize;
+        let max_len = max_len as usize;
+
+        while buffer.len() < max_len {
+            let byte = self.inner().read(address);
+            if byte == 0 {
+                break;
+            }
+            buffer.push(byte);
+            address += 1;
+        }
+
+        String::from_utf8_lossy(&buffer).to_string()
     }
 }

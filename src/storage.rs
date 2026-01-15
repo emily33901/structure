@@ -22,8 +22,12 @@ mod v1 {
         U16,
         U32,
         U64,
+        Utf8(usize),
+        PointerUtf8(usize),
+        Comment(String),
         Struct(RegistryId),
         Pointer(RegistryId),
+        Logic(RegistryId),
     }
 
     impl Node {
@@ -33,11 +37,17 @@ mod v1 {
                 Node::U16 => crate::definition::Node::U16,
                 Node::U32 => crate::definition::Node::U32,
                 Node::U64 => crate::definition::Node::U64,
+                Node::Utf8(len) => crate::definition::Node::Utf8(*len),
+                Node::PointerUtf8(len) => crate::definition::Node::PointerUtf8(*len),
+                Node::Comment(comment) => crate::definition::Node::Comment(comment.clone()),
                 Node::Struct(registry_id) => crate::definition::Node::Struct(Rc::downgrade(
                     registry.structs.get(registry_id).unwrap(),
                 )),
                 Node::Pointer(registry_id) => crate::definition::Node::Pointer(Rc::downgrade(
                     registry.structs.get(registry_id).unwrap(),
+                )),
+                Node::Logic(registry_id) => crate::definition::Node::Logic(Rc::downgrade(
+                    registry.logics.get(registry_id).unwrap(),
                 )),
             }
         }
@@ -54,10 +64,17 @@ mod v1 {
     pub(super) struct Address(pub(super) String, pub(super) usize);
 
     #[derive(Serialize, Deserialize)]
+    pub(super) struct Logic {
+        pub(super) script: String,
+        pub(super) name: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
     pub(super) struct Registry {
         pub(super) next_id: usize,
         pub(super) structs: HashMap<RegistryId, Struct>,
         pub(super) addresses: HashMap<RegistryId, Address>,
+        pub(super) logics: HashMap<RegistryId, Logic>,
     }
 
     #[derive(Serialize, Deserialize)]
@@ -70,6 +87,13 @@ mod v1 {
         AddressList,
         ProcessList {
             matching: String,
+        },
+        ScriptList,
+        ScriptEditor {
+            logic: RegistryId,
+        },
+        Scratch {
+            logic: RegistryId,
         },
     }
 
@@ -107,6 +131,11 @@ mod v1 {
                     .into_iter()
                     .map(|(k, v)| (k, Rc::new(RefCell::new(v.into()))))
                     .collect(),
+                logics: value
+                    .logics
+                    .into_iter()
+                    .map(|(k, v)| (k, Rc::new(RefCell::new(v.make_real(k)))))
+                    .collect(),
                 dirty: true,
             };
 
@@ -124,6 +153,16 @@ mod v1 {
     impl From<Address> for crate::Address {
         fn from(value: Address) -> Self {
             Self(value.0, value.1)
+        }
+    }
+
+    impl Logic {
+        fn make_real(&self, id: RegistryId) -> crate::definition::Logic {
+            crate::definition::Logic {
+                script: self.script.clone(),
+                name: self.name.clone(),
+                id,
+            }
         }
     }
 
@@ -145,7 +184,7 @@ mod v1 {
             real.nodes = self
                 .nodes
                 .into_iter()
-                .map(|(k, v)| (k, RefCell::new(v.make_real(registry))))
+                .map(|(k, v)| (k, Rc::new(RefCell::new(v.make_real(registry)))))
                 .collect()
         }
     }
@@ -164,6 +203,20 @@ mod v1 {
                     Pane::ProcessList { matching } => Some(crate::Pane::ProcessList {
                         matching: matching.into(),
                     }),
+                    Pane::ScriptList => Some(crate::Pane::ScriptList),
+                    Pane::ScriptEditor { logic } => {
+                        registry
+                            .logics
+                            .get(logic)
+                            .map(|l| crate::Pane::ScriptEditor {
+                                logic: Rc::downgrade(l),
+                            })
+                    }
+                    Pane::Scratch { logic } => {
+                        registry.logics.get(logic).map(|l| crate::Pane::Scratch {
+                            logic: Rc::downgrade(l),
+                        })
+                    }
                 }),
             };
 
@@ -183,12 +236,18 @@ impl v1::Node {
             crate::definition::Node::U16 => Some(Self::U16),
             crate::definition::Node::U32 => Some(Self::U32),
             crate::definition::Node::U64 => Some(Self::U64),
+            crate::definition::Node::Utf8(len) => Some(Self::Utf8(*len)),
+            crate::definition::Node::PointerUtf8(len) => Some(Self::PointerUtf8(*len)),
+            crate::definition::Node::Comment(comment) => Some(Self::Comment(comment.clone())),
             crate::definition::Node::Struct(s) => s
                 .upgrade()
                 .map(|s| Self::Struct(registry.struct_id(&s).unwrap())),
             crate::definition::Node::Pointer(s) => s
                 .upgrade()
                 .map(|s| Self::Pointer(registry.struct_id(&s).unwrap())),
+            crate::definition::Node::Logic(logic) => logic
+                .upgrade()
+                .map(|logic| Self::Logic(registry.logic_id(&logic).unwrap())),
         }
     }
 }
@@ -213,6 +272,15 @@ impl v1::Address {
     }
 }
 
+impl v1::Logic {
+    pub(crate) fn new(from: &crate::definition::Logic) -> Self {
+        Self {
+            script: from.script.clone(),
+            name: from.name.clone(),
+        }
+    }
+}
+
 impl v1::Registry {
     fn new(from: &crate::Registry) -> Self {
         Self {
@@ -226,6 +294,11 @@ impl v1::Registry {
                 .addresses
                 .iter()
                 .map(|(k, v)| (*k, v1::Address::new(&v.borrow())))
+                .collect(),
+            logics: from
+                .logics
+                .iter()
+                .map(|(k, v)| (*k, v1::Logic::new(&v.borrow())))
                 .collect(),
         }
     }
@@ -365,6 +438,15 @@ impl v1::Layout {
                 crate::Pane::AddressList => Some(v1::Pane::AddressList),
                 crate::Pane::ProcessList { matching } => Some(v1::Pane::ProcessList {
                     matching: matching.clone(),
+                }),
+                crate::Pane::ScriptList => Some(v1::Pane::ScriptList),
+                crate::Pane::ScriptEditor { logic } => {
+                    logic.upgrade().map(|l| v1::Pane::ScriptEditor {
+                        logic: registry.logic_id(&l).unwrap(),
+                    })
+                }
+                crate::Pane::Scratch { logic } => logic.upgrade().map(|l| v1::Pane::Scratch {
+                    logic: registry.logic_id(&l).unwrap(),
                 }),
             }),
         };

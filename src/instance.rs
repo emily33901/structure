@@ -1,5 +1,11 @@
+pub mod logic_instance;
+pub mod struct_instance;
+
+pub use logic_instance::{LogicCallbacks, LogicInstance};
+pub use struct_instance::StructInstance;
+
 use std::{
-    cell::{Ref, RefCell},
+    cell::RefCell,
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -8,16 +14,16 @@ use egui::{Align, Layout, RichText, collapsing_header::CollapsingState, vec2};
 use egui_extras::{Size, StripBuilder};
 
 use crate::{
-    Address, State,
-    definition::{Node, Struct},
+    State,
+    definition::Node,
     memory::{self, highlightable_address_text},
-    node::{StructAction, StructUiFlags},
-    pane::AddressResponse,
+    node::StructUiFlags,
+    pane::{AddressResponse, PaneResponse},
     registry::RegistryId,
     ui::{self, NODE_UNIT_ROW_HEIGHT},
 };
 
-#[derive(Hash)]
+#[derive(Hash, Clone, Eq, PartialEq)]
 pub struct Location(u64);
 
 impl Location {
@@ -34,20 +40,20 @@ impl Location {
     }
 }
 
-pub struct NodeInstance<'a> {
+pub struct NodeInstance {
     address: usize,
     offset_in_parent: usize,
     location: Location,
 
-    definition: Ref<'a, RefCell<Node>>,
+    definition: Rc<RefCell<Node>>,
 }
 
-impl<'a> NodeInstance<'a> {
-    fn new(
+impl NodeInstance {
+    pub(crate) fn new(
         address: usize,
         offset_in_parent: usize,
         location: Location,
-        definition: Ref<'a, RefCell<Node>>,
+        definition: Rc<RefCell<Node>>,
     ) -> Self {
         Self {
             address,
@@ -75,60 +81,96 @@ impl<'a> NodeInstance<'a> {
             address,
             self.location.progress(self.offset_in_parent),
             self.offset_in_parent,
+            Some(self.definition.clone()),
         ))
     }
-}
 
-pub struct StructInstance {
-    address: usize,
-    offset_in_parent: usize,
-    location: Location,
-    definition: Rc<RefCell<Struct>>,
-}
+    fn logic_instance(&self, state: &RefCell<State>) -> Option<Rc<LogicInstance>> {
+        let definition = match &*self.definition.borrow() {
+            Node::Logic(logic) => logic.upgrade()?,
+            _ => return None,
+        };
 
-impl StructInstance {
-    pub fn new(
-        definition: Rc<RefCell<Struct>>,
-        address: usize,
-        location: Location,
-        offset_in_parent: usize,
-    ) -> Self {
-        Self {
+        let location = self.location.progress(self.offset_in_parent);
+
+        {
+            let state = state.borrow();
+            if let Some(frame) = &state.this_frame
+                && let Some(cached) = frame.logic_instance_cache.get(&location)
+            {
+                return Some(cached.clone());
+            }
+        }
+
+        let instance = Rc::new(LogicInstance::new(
             definition,
-            offset_in_parent,
-            location,
-            address,
+            self.address,
+            location.clone(),
+            self.offset_in_parent,
+            state,
+            self.definition.clone(),
+        ));
+
+        state
+            .borrow_mut()
+            .this_frame_mut()
+            .logic_instance_cache
+            .insert(location, instance.clone());
+
+        Some(instance)
+    }
+
+    fn row_count(&self, state: &RefCell<State>) -> usize {
+        match &*self.definition.borrow() {
+            Node::U8
+            | Node::U16
+            | Node::U32
+            | Node::U64
+            | Node::Utf8(_)
+            | Node::PointerUtf8(_)
+            | Node::Comment(_)
+            | Node::Pointer(_) => 1,
+            Node::Struct(s) => s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1),
+            Node::Logic(_) => {
+                let logic_instance = self.logic_instance(state).unwrap();
+                logic_instance.row_count(state)
+            }
         }
     }
 
-    fn ui_id(&self) -> egui::Id {
-        egui::Id::new(&self.location)
-    }
-
-    fn collapsing(&self, ctx: &egui::Context) -> CollapsingState {
-        let eid = self.ui_id();
-        CollapsingState::load_with_default_open(ctx, eid, false)
-    }
-}
-
-impl<'a> NodeInstance<'a> {
-    fn row_count(&self) -> usize {
-        self.definition.borrow().row_count()
-    }
-
-    fn byte_size(&self) -> usize {
+    pub(crate) fn byte_size(&self, state: &RefCell<State>) -> usize {
+        // TODO(emily): It's a little strange here that we special case
+        // for logic instance, and not any of the other instances?
+        if let Some(logic_instance) = self.logic_instance(state) {
+            return logic_instance.byte_size(state);
+        }
         self.definition.borrow().byte_size()
     }
 
     pub fn height(&self, item_spacing_y: f32, ctx: &egui::Context, state: &RefCell<State>) -> f32 {
+        // TODO(emily): This is sad, we would probably like to combine more of this code for both logic and structs.
+        // but because the iterator types are different I can't be bothered right now.
+        if let Some(logic_instance) = self.logic_instance(state) {
+            let collapsing = logic_instance.collapsing(ctx);
+            let row_heights = logic_instance.row_heights(ctx.clone(), state, item_spacing_y);
+            return Self::collapsible_height(item_spacing_y, ctx, collapsing, row_heights);
+        }
+
         let Some(struct_instance) = self.struct_instance(state) else {
             return ui::NODE_UNIT_ROW_HEIGHT;
         };
 
-        let item_spacing_y = item_spacing_y;
-
         let collapsing = struct_instance.collapsing(ctx);
+        let row_heights = struct_instance.row_heights(item_spacing_y, ctx, state);
+        Self::collapsible_height(item_spacing_y, ctx, collapsing, row_heights)
+    }
 
+    fn collapsible_height(
+        item_spacing_y: f32,
+        ctx: &egui::Context,
+        collapsing: CollapsingState,
+        row_heights: impl Iterator<Item = f32>,
+    ) -> f32 {
         // NOTE(emily): Here we account for the extra padding in the egui table.
         let extra = 16.0 + item_spacing_y;
 
@@ -138,15 +180,12 @@ impl<'a> NodeInstance<'a> {
             return extra;
         }
 
-        let height: f32 = struct_instance
-            .row_heights(item_spacing_y, ctx, state)
-            .map(|x| x + item_spacing_y)
-            .sum();
+        let content_height: f32 = row_heights.map(|h| h + item_spacing_y).sum();
 
-        height * openness + extra
+        content_height * openness + extra
     }
 
-    fn heading_offset_and_address_inner<F: FnOnce(&mut egui::Ui)>(
+    pub(crate) fn heading_offset_and_address_inner<F: FnOnce(&mut egui::Ui)>(
         ui: &mut egui::Ui,
         address: usize,
         offset: usize,
@@ -272,6 +311,63 @@ impl<'a> NodeInstance<'a> {
         );
     }
 
+    fn logic_heading(
+        &self,
+        ui: &mut egui::Ui,
+        logic_instance: &LogicInstance,
+        state: &RefCell<State>,
+    ) -> CollapsingState {
+        let mut collapsing = logic_instance.collapsing(ui.ctx());
+
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                let openness = collapsing.openness(ui.ctx());
+
+                self.heading_offset_and_address(
+                    ui,
+                    |ui| {
+                        let (_id, rect) =
+                            ui.allocate_space(egui::Vec2::splat(ui.spacing().icon_width));
+                        let response =
+                            ui.interact(rect, ui.id().with(collapsing.id()), egui::Sense::click());
+                        if response.clicked() {
+                            collapsing.toggle(ui);
+                        }
+
+                        egui::collapsing_header::paint_default_icon(ui, openness, &response);
+                    },
+                    state,
+                );
+
+                ui.label("Logic");
+
+                ui.add_space(ui::spacing(ui));
+
+                logic_instance.heading(ui, state);
+
+                let logic_name = logic_instance.name();
+                ui.label(&*logic_name);
+
+                ui.add_space(ui::spacing(ui));
+
+                if ui.button("Edit").clicked() {
+                    state
+                        .borrow_mut()
+                        .response(PaneResponse::OpenScript(logic_instance.definition()));
+                }
+
+                if ui.button("Scratch").clicked() {
+                    state
+                        .borrow_mut()
+                        .response(PaneResponse::OpenScratch(logic_instance.definition()));
+                }
+            },
+        );
+        collapsing
+    }
+
     fn node_struct_ui_inner(
         &self,
         ui: &mut egui::Ui,
@@ -300,12 +396,40 @@ impl<'a> NodeInstance<'a> {
         );
     }
 
-    fn node_ui_inner(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
-        self.heading(ui, state);
+    fn logic_instance_ui_inner(
+        &self,
+        ui: &mut egui::Ui,
+        logic_instance: &LogicInstance,
+        state: &RefCell<State>,
+    ) {
+        let height = self.height(ui.spacing().item_spacing.y, ui.ctx(), state);
 
-        let definition = self.definition.borrow();
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), height),
+            Layout::top_down(Align::Min),
+            |ui| {
+                let spacing = ui::spacing(ui);
+
+                let mut collapse_state = self.logic_heading(ui, logic_instance, state);
+
+                collapse_state.show_body_unindented(ui, |ui| {
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.add_space(spacing);
+
+                        logic_instance.ui(ui, state);
+                    })
+                    .inner
+                });
+            },
+        );
+    }
+
+    fn node_ui_inner(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
-            let size = match &*definition {
+            self.heading(ui, state);
+
+            let mut definition = self.definition.borrow_mut();
+            let size = match &mut *definition {
                 Node::U64 => {
                     ui.label("U64");
                     8
@@ -322,22 +446,40 @@ impl<'a> NodeInstance<'a> {
                     ui.label("U8");
                     1
                 }
-                _ => unreachable!(),
+                Node::Comment(comment) => {
+                    ui.text_edit_singleline(comment);
+                    return;
+                }
+                Node::Utf8(len) => {
+                    ui.label("Utf8");
+                    utf8_ui(ui, self.address, len, state);
+                    return;
+                }
+                Node::PointerUtf8(len) => {
+                    ui.label("Utf8");
+                    let address = state.borrow_mut().memory.read(self.address);
+
+                    utf8_ui(ui, address, len, state);
+                    return;
+                }
+                x => unreachable!("no idea what to do with {x:?}"),
             };
 
             self.none_ui(ui, Some(size), state);
         });
     }
 
-    fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
+    pub(crate) fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         if let Some(struct_instance) = self.struct_instance(state) {
             self.node_struct_ui_inner(ui, &struct_instance, state);
+        } else if let Some(logic_instance) = self.logic_instance(state) {
+            self.logic_instance_ui_inner(ui, &logic_instance, state);
         } else {
             self.node_ui_inner(ui, state);
         }
     }
 
-    fn context_menu(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
+    pub(crate) fn context_menu(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
         if let Some(struct_instance) = self.struct_instance(state)
             && ui.button("Open struct in new tab").clicked()
         {
@@ -353,7 +495,7 @@ impl<'a> NodeInstance<'a> {
         }
     }
 
-    fn none_ui_inner(
+    pub(crate) fn none_ui_inner(
         ui: &mut egui::Ui,
         address: usize,
         offset_in_parent: usize,
@@ -412,7 +554,7 @@ impl<'a> NodeInstance<'a> {
         Self::none_ui_inner(ui, self.address, self.offset_in_parent, size, state)
     }
 
-    fn make_node_options(
+    pub(crate) fn make_node_options(
         ui: &mut egui::Ui,
         row_index: usize,
         state: &RefCell<State>,
@@ -433,6 +575,19 @@ impl<'a> NodeInstance<'a> {
                     row_index,
                 ));
             }
+            if ui.button("Logic").clicked() {
+                return Some((
+                    Node::Logic(Rc::downgrade(&state.borrow_mut().registry.default_logic())),
+                    row_index,
+                ));
+            }
+
+            if ui.button("Comment").clicked() {
+                return Some((Node::Comment(String::new()), row_index));
+            }
+
+            ui.separator();
+
             if ui.button("U64").clicked() {
                 return Some((Node::U64, row_index));
             }
@@ -446,292 +601,27 @@ impl<'a> NodeInstance<'a> {
                 return Some((Node::U8, row_index));
             }
 
+            ui.separator();
+
+            if ui.button("Utf8").clicked() {
+                return Some((Node::Utf8(16), row_index));
+            }
+            if ui.button("Pointer to utf8").clicked() {
+                return Some((Node::PointerUtf8(16), row_index));
+            }
+
             None
         })()
         .map(|(node, row_index)| MakeNodeAction::Add(node, row_index))
     }
 }
 
-enum MakeNodeAction {
+pub(crate) enum MakeNodeAction {
     Add(Node, usize),
     Remove(usize),
 }
 
-impl StructInstance {
-    fn id(&self) -> RegistryId {
-        self.definition.borrow().id
-    }
-
-    fn name(&self) -> Ref<'_, str> {
-        Ref::map(self.definition.borrow(), |definition| {
-            definition.name.as_str()
-        })
-    }
-
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
-        let definition = self.definition.borrow();
-        let node_definition =
-            Ref::filter_map(definition, |definition| definition.nodes.get(&row)).ok()?;
-        Some(NodeInstance::new(
-            address,
-            offset,
-            self.location.progress(offset),
-            node_definition,
-        ))
-    }
-
-    fn row_count(&self) -> usize {
-        self.definition.borrow().row_count()
-    }
-
-    fn row_heights<'a, 'b, 'c>(
-        &'a self,
-        item_spacing_y: f32,
-        ctx: &egui::Context,
-        state: &'b RefCell<State<'c>>,
-    ) -> StructRowHeightIterator<'a, 'b, 'c> {
-        StructRowHeightIterator {
-            ctx: ctx.clone(),
-            instance: self,
-            state,
-            cur_offset: 0,
-            cur_row: 0,
-            row_count: self.row_count(),
-            item_spacing_y,
-        }
-    }
-
-    fn bytes_for_row(&self, row_index: usize) -> usize {
-        // TODO(emily): This is abysmal.
-        let mut bytes = 0;
-        for row in 0..row_index {
-            if let Some(node) = self.node(row, self.address + bytes, bytes) {
-                bytes += node.byte_size();
-            } else {
-                bytes += none_ui_rules(bytes);
-            }
-        }
-
-        bytes
-    }
-
-    pub(crate) fn heading(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
-        ui.allocate_ui_with_layout(
-            vec2(ui.available_width(), ui::NODE_UNIT_ROW_HEIGHT),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                let self_name = self.name();
-                let self_id = self.id();
-
-                egui::ComboBox::new((self.ui_id(), "struct-replace-combo-box"), "")
-                    .selected_text(&*self_name)
-                    .show_ui(ui, |ui| {
-                        let mut state = state.borrow_mut();
-                        for (id, other_struct) in state.registry.structs.clone() {
-                            let other_struct_name = other_struct.borrow().name.clone();
-                            if ui
-                                .add(
-                                    egui::Button::new(format!("{} ({id})", other_struct_name))
-                                        .selected(id == self_id),
-                                )
-                                .clicked()
-                            {
-                                state.response(AddressResponse::Replace(other_struct.clone()))
-                            }
-                        }
-
-                        ui.separator();
-
-                        if ui.button("New struct".to_string()).clicked() {
-                            let default_struct = state.registry.default_struct();
-                            state.response(AddressResponse::Replace(default_struct));
-                        }
-                    });
-
-                let mut row_count = self.row_count();
-
-                if ui
-                    .add(egui::DragValue::new(&mut row_count).range(1..=8192))
-                    .changed()
-                {
-                    // TODO(emily): There should be some easy way to clean up the amount of wrapping going on here
-                    state.borrow_mut().response(StructAction::new({
-                        let definition = self.definition.clone();
-                        move |_| {
-                            definition.borrow_mut().row_count = row_count;
-                        }
-                    }))
-                }
-
-                ui.end_row();
-            },
-        );
-    }
-
-    pub(crate) fn ui(&self, flags: StructUiFlags, ui: &mut egui::Ui, state: &RefCell<State>) {
-        let max_height = ui.available_height();
-
-        let mut size = 0;
-
-        ui.with_layout(Layout::top_down(Align::Min), |ui| {
-            let mut action = None;
-
-            let style = ui.style_mut();
-            style.override_text_style = Some(egui::TextStyle::Monospace);
-
-            let heights = self.row_heights(ui.spacing().item_spacing.y, ui.ctx(), state);
-            let _self_name = self.name();
-
-            egui_extras::TableBuilder::new(ui)
-                // .id_salt((address, &self_name))
-                .vscroll(flags.top_level)
-                .max_scroll_height(max_height)
-                .column(egui_extras::Column::remainder())
-                .sense(egui::Sense::click())
-                .body(|body| {
-                    body.heterogeneous_rows(heights, |mut row| {
-                        // TODO(emily): You need to get the number of bytes in that this row would logically be.
-                        // probably by iterating like we are doing below but for everything up to this index
-                        // maybe cache it so that its not abysmally slow towards the end.
-                        let index = row.index();
-                        let offset = self.bytes_for_row(index);
-
-                        let (_, r) = row.col(|ui| {
-                            let new_address = self.address.wrapping_add(offset);
-
-                            let Some(node) = self.node(index, new_address, offset) else {
-                                // TODO(emily): Kind of weird that node.ui handles the heading and yet
-                                // none ui 'requires' us to rendering the heading here.
-
-                                ui.allocate_ui_with_layout(
-                                    vec2(ui.available_width(), NODE_UNIT_ROW_HEIGHT),
-                                    Layout::left_to_right(Align::Center),
-                                    |ui| {
-                                        NodeInstance::heading_offset_and_address_inner(
-                                            ui,
-                                            new_address,
-                                            offset,
-                                            |_ui| {},
-                                            state,
-                                        );
-
-                                        NodeInstance::none_ui_inner(
-                                            ui,
-                                            new_address,
-                                            offset,
-                                            None,
-                                            state,
-                                        )
-                                    },
-                                );
-                                return;
-                            };
-
-                            node.ui(ui, state);
-
-                            let bytes = node.byte_size();
-
-                            // Accumulate bytes for the total size of this struct
-                            size += bytes;
-                        });
-
-                        r.context_menu(|ui| {
-                            let address = self.address + offset;
-
-                            if ui.button("Open address in new window").clicked() {
-                                state.borrow_mut().response(AddressResponse::AddressStruct(
-                                    Some(
-                                        state
-                                            .borrow_mut()
-                                            .registry
-                                            .find_or_register_address(Address::from(address)),
-                                    ),
-                                    None,
-                                ))
-                            }
-
-                            if let Some(node) = self.node(index, address, offset) {
-                                ui.separator();
-                                node.context_menu(ui, state);
-                            }
-
-                            ui.separator();
-                            action = NodeInstance::make_node_options(ui, index, state);
-                        });
-                    });
-                });
-
-            if let Some(action) = action {
-                state.borrow_mut().response(StructAction::new({
-                    let definition = self.definition.clone();
-                    move |_registry| {
-                        let mut definition = definition.borrow_mut();
-                        match action {
-                            MakeNodeAction::Add(node, offset) => {
-                                definition.nodes.insert(offset, RefCell::new(node));
-                            }
-                            MakeNodeAction::Remove(row) => {
-                                definition.nodes.remove(&row);
-                            }
-                        }
-                    }
-                }));
-            }
-        });
-    }
-}
-
-struct StructRowHeightIterator<'instance, 'state, 'state_owner> {
-    ctx: egui::Context,
-    instance: &'instance StructInstance,
-    state: &'state RefCell<State<'state_owner>>,
-    cur_row: usize,
-    cur_offset: usize,
-    row_count: usize,
-    item_spacing_y: f32,
-}
-
-impl<'a, 'b, 'c> StructRowHeightIterator<'a, 'b, 'c> {
-    fn node(&self, row: usize, address: usize, offset: usize) -> Option<NodeInstance<'_>> {
-        self.instance.node(row, address, offset)
-    }
-
-    fn row_height(&mut self, index: usize, address: usize, offset: usize) -> (f32, usize) {
-        let Some(node) = self.node(index, address, self.cur_offset) else {
-            return (ui::NODE_UNIT_ROW_HEIGHT, none_ui_rules(offset));
-        };
-
-        (
-            node.height(self.item_spacing_y, &self.ctx, self.state),
-            node.byte_size(),
-        )
-    }
-}
-
-impl<'a, 'b, 'c> Iterator for StructRowHeightIterator<'a, 'b, 'c> {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cur_row = self.cur_row;
-        let cur_offset = self.cur_offset;
-
-        if cur_row >= self.row_count {
-            return None;
-        }
-
-        let row_index = self.cur_row;
-        let address = self.instance.address + self.cur_offset;
-
-        let (height, bytes) = self.row_height(row_index, address, cur_offset);
-
-        self.cur_row += 1;
-        self.cur_offset += bytes;
-
-        Some(height)
-    }
-}
-
-fn none_ui_rules(bytes: usize) -> usize {
+pub(crate) fn none_ui_rules(bytes: usize) -> usize {
     if bytes.is_multiple_of(8) {
         8
     } else if bytes % 8 == 4 {
@@ -743,4 +633,18 @@ fn none_ui_rules(bytes: usize) -> usize {
     } else {
         unreachable!()
     }
+}
+
+fn utf8_ui(ui: &mut egui::Ui, address: usize, len: &mut usize, state: &RefCell<State>) {
+    ui.add(egui::DragValue::new(len));
+
+    ui.add_space(ui::spacing(ui));
+
+    let len = std::cmp::min(*len, 2000);
+
+    let mut buffer = vec![0_u8; len];
+    state.borrow_mut().memory.get(address, &mut buffer);
+    let s = String::from_utf8_lossy(&buffer);
+
+    ui.label(s);
 }

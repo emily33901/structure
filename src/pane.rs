@@ -4,13 +4,13 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::registry::RegistryId;
 use crate::{Address, instance::StructInstance};
 use crate::{
     State,
-    definition::Struct,
-    node::{StructAction, StructUiFlags},
+    definition::{Logic, Struct},
+    node::{Action, StructUiFlags},
 };
+use crate::{definition::Node, registry::RegistryId};
 use crate::{instance::Location, process::Process};
 use egui::ScrollArea;
 use egui_extras::Column;
@@ -24,6 +24,13 @@ pub enum Pane {
     AddressList,
     ProcessList {
         matching: String,
+    },
+    ScriptList,
+    ScriptEditor {
+        logic: Weak<RefCell<Logic>>,
+    },
+    Scratch {
+        logic: Weak<RefCell<Logic>>,
     },
 }
 
@@ -173,6 +180,7 @@ impl Pane {
                         **address.borrow(),
                         Location::new(state.borrow().registry.address_id(&address).unwrap()),
                         0,
+                        None, // No parent node for top-level
                     );
 
                     struct_instance.heading(ui, state);
@@ -308,6 +316,86 @@ impl Pane {
                         .response(PaneResponse::ProcessSelected(new_process.clone()));
                 }
             }
+            Pane::ScriptList => {
+                ui.heading("Scripts");
+
+                ui.separator();
+
+                match Pane::registry_list(
+                    ui,
+                    |state| Ref::map(state.borrow(), |state| &state.registry.logics),
+                    |ui, logic| {
+                        ui.text_edit_singleline(&mut logic.borrow_mut().name);
+                    },
+                    50.0,
+                    |ui, logic| {
+                        ui.label(format!("{} chars", logic.borrow().script.len()));
+                    },
+                    |logic, _state| PaneResponse::OpenScript(logic.clone()),
+                    &["id", "length", "name"],
+                    state,
+                ) {
+                    Some(RegistryListResponse::Remove(id)) => {
+                        state.borrow_mut().registry.logics.remove(&id);
+                    }
+                    Some(RegistryListResponse::PaneResponse(response)) => {
+                        state.borrow_mut().response(response)
+                    }
+                    _ => {}
+                }
+            }
+            Pane::ScriptEditor { logic } => {
+                let Some(logic) = logic.upgrade() else {
+                    ui.heading("Script not found");
+                    return;
+                };
+
+                let name = logic.borrow().name.clone();
+                ui.heading(format!("Script {}", name));
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut logic.borrow_mut().name);
+                });
+
+                ui.separator();
+
+                ScrollArea::both().show(ui, |ui| {
+                    let mut script = logic.borrow().script.clone();
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut script)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(30),
+                    );
+                    if response.changed() {
+                        logic.borrow_mut().script = script;
+                    }
+                });
+            }
+            Pane::Scratch { logic } => {
+                let Some(logic) = logic.upgrade() else {
+                    ui.heading("Script not found");
+                    return;
+                };
+
+                let logic_id = logic.borrow().id;
+                let name = logic.borrow().name.clone();
+
+                ui.heading(format!("Scratch: {}", name));
+                ui.separator();
+
+                if let Some(content) = state.borrow().scratch_pad.get(logic_id) {
+                    ScrollArea::both().show(ui, |ui| {
+                        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                        ui.label(content);
+                    });
+                } else {
+                    ui.label("(no output)");
+                }
+            }
         }
     }
 
@@ -323,6 +411,15 @@ impl Pane {
             Pane::AddressList => "Address list".into(),
             Pane::StructList => "Struct list".into(),
             Pane::ProcessList { matching: _ } => "Process list".into(),
+            Pane::ScriptList => "Script list".into(),
+            Pane::ScriptEditor { logic } => logic
+                .upgrade()
+                .map(|l| format!("Script: {}", l.borrow().name))
+                .unwrap_or_else(|| "Script not found".into()),
+            Pane::Scratch { logic } => logic
+                .upgrade()
+                .map(|l| format!("Scratch: {}", l.borrow().name))
+                .unwrap_or_else(|| "Scratch".into()),
         }
     }
 }
@@ -333,8 +430,12 @@ pub enum PaneResponse {
     // TODO(emily): OpenAddress and OpenStruct can just be AddChild
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
+    OpenScript(Rc<RefCell<Logic>>),
+    OpenScratch(Rc<RefCell<Logic>>),
     ProcessSelected(Process),
     AddChild(AddChild),
+    StructResponse(StructResponse),
+    LogicResponse(LogicResponse),
     Close,
 }
 
@@ -342,7 +443,7 @@ pub enum PaneResponse {
 pub enum AddressResponse {
     AddressStruct(Option<Rc<RefCell<Address>>>, Option<Rc<RefCell<Struct>>>),
     Replace(Rc<RefCell<Struct>>),
-    Action(StructAction),
+    Action(Action),
 }
 
 #[derive(Debug)]
@@ -351,6 +452,19 @@ pub enum AddChild {
     AddressList,
     StructList,
     ProcessList,
+    ScriptList,
+    ScriptEditor(Rc<RefCell<Logic>>),
+    Scratch(Rc<RefCell<Logic>>),
+}
+
+#[derive(Debug)]
+pub enum LogicResponse {
+    Replace(Weak<RefCell<Node>>, Weak<RefCell<Logic>>),
+}
+
+#[derive(Debug)]
+pub enum StructResponse {
+    Replace(Weak<RefCell<Node>>, Weak<RefCell<Struct>>),
 }
 
 impl From<AddressResponse> for PaneResponse {
@@ -359,8 +473,20 @@ impl From<AddressResponse> for PaneResponse {
     }
 }
 
-impl From<StructAction> for PaneResponse {
-    fn from(val: StructAction) -> Self {
+impl From<Action> for PaneResponse {
+    fn from(val: Action) -> Self {
         PaneResponse::AddressStructResponse(AddressResponse::Action(val))
+    }
+}
+
+impl From<StructResponse> for PaneResponse {
+    fn from(value: StructResponse) -> Self {
+        PaneResponse::StructResponse(value)
+    }
+}
+
+impl From<LogicResponse> for PaneResponse {
+    fn from(value: LogicResponse) -> Self {
+        PaneResponse::LogicResponse(value)
     }
 }
