@@ -94,12 +94,12 @@ impl StructInstance {
         }
     }
 
-    pub(super) fn bytes_for_row(&self, row_index: usize) -> usize {
+    pub(super) fn bytes_for_row(&self, row_index: usize, state: &RefCell<State>) -> usize {
         // TODO(emily): This is abysmal.
         let mut bytes = 0;
         for row in 0..row_index {
             if let Some(node) = self.node(row, self.address + bytes, bytes) {
-                bytes += node.byte_size();
+                bytes += node.byte_size(state);
             } else {
                 bytes += none_ui_rules(bytes);
             }
@@ -201,7 +201,7 @@ impl StructInstance {
                         // probably by iterating like we are doing below but for everything up to this index
                         // maybe cache it so that its not abysmally slow towards the end.
                         let index = row.index();
-                        let offset = self.bytes_for_row(index);
+                        let offset = self.bytes_for_row(index, state);
 
                         let (_, r) = row.col(|ui| {
                             let new_address = self.address.wrapping_add(offset);
@@ -236,7 +236,7 @@ impl StructInstance {
 
                             node.ui(ui, state);
 
-                            let bytes = node.byte_size();
+                            let bytes = node.byte_size(state);
 
                             // Accumulate bytes for the total size of this struct
                             size += bytes;
@@ -310,7 +310,7 @@ impl<'a, 'b, 'c> StructRowHeightIterator<'a, 'b, 'c> {
 
         (
             node.height(self.item_spacing_y, &self.ctx, self.state),
-            node.byte_size(),
+            node.byte_size(self.state),
         )
     }
 }

@@ -121,7 +121,12 @@ impl NodeInstance {
         }
     }
 
-    pub(crate) fn byte_size(&self) -> usize {
+    pub(crate) fn byte_size(&self, state: &RefCell<State>) -> usize {
+        // TODO(emily): It's a little strange here that we special case
+        // for logic instance, and not any of the other instances?
+        if let Some(logic_instance) = self.logic_instance(state) {
+            return logic_instance.byte_size(state);
+        }
         self.definition.borrow().byte_size()
     }
 
