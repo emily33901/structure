@@ -87,7 +87,6 @@ struct TreeBehaviorOptions {
     simplification_options: egui_tiles::SimplificationOptions,
     tab_bar_height: f32,
     gap_width: f32,
-    pane_response: Option<(TileId, PaneResponse)>,
 }
 
 impl Default for TreeBehaviorOptions {
@@ -99,7 +98,6 @@ impl Default for TreeBehaviorOptions {
             },
             tab_bar_height: 24.0,
             gap_width: 4.0,
-            pane_response: None,
         }
     }
 }
@@ -221,10 +219,13 @@ impl<'a, 'b> egui_tiles::Behavior<Pane> for TreeBehavior<'a, 'b> {
             if ui.button("Process list").clicked() {
                 response = Some(AddChild::ProcessList);
             }
+            if ui.button("Script list").clicked() {
+                response = Some(AddChild::ScriptList);
+            }
         });
 
         if let Some(add_child) = response {
-            self.options.pane_response = Some((tile_id, PaneResponse::AddChild(add_child)));
+            self.state.borrow_mut().response_with_tile_id(tile_id, PaneResponse::AddChild(add_child))
         }
     }
 }
@@ -269,6 +270,10 @@ impl<'a> State<'a> {
     }
 
     fn response(&mut self, new_response: impl Into<PaneResponse>) {
+        self.this_frame_mut().response(new_response);
+    }
+
+    fn response_with_tile_id(&mut self, tile_id: TileId, new_response: impl Into<PaneResponse>) {
         self.this_frame_mut().response(new_response);
     }
 
@@ -408,6 +413,11 @@ impl App {
                     state.borrow_mut().registry,
                     from,
                     AddChild::AddressStruct(Some(s), None),
+                ),
+                PaneResponse::OpenScript(logic) => layout.add_child(
+                    state.borrow_mut().registry,
+                    from,
+                    AddChild::ScriptEditor(logic),
                 ),
                 PaneResponse::ProcessSelected(new_process) => {
                     *unhandled_response = Some((from, PaneResponse::ProcessSelected(new_process)))

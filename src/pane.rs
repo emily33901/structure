@@ -7,7 +7,7 @@ use std::{
 use crate::{Address, instance::StructInstance};
 use crate::{
     State,
-    definition::Struct,
+    definition::{Logic, Struct},
     node::{StructAction, StructUiFlags},
 };
 use crate::{definition::Node, registry::RegistryId};
@@ -24,6 +24,10 @@ pub enum Pane {
     AddressList,
     ProcessList {
         matching: String,
+    },
+    ScriptList,
+    ScriptEditor {
+        logic: Weak<RefCell<Logic>>,
     },
 }
 
@@ -309,6 +313,65 @@ impl Pane {
                         .response(PaneResponse::ProcessSelected(new_process.clone()));
                 }
             }
+            Pane::ScriptList => {
+                ui.heading("Scripts");
+
+                ui.separator();
+
+                match Pane::registry_list(
+                    ui,
+                    |state| Ref::map(state.borrow(), |state| &state.registry.logics),
+                    |ui, logic| {
+                        ui.text_edit_singleline(&mut logic.borrow_mut().name);
+                    },
+                    50.0,
+                    |ui, logic| {
+                        ui.label(format!("{} chars", logic.borrow().script.len()));
+                    },
+                    |logic, _state| PaneResponse::OpenScript(logic.clone()),
+                    &["id", "length", "name"],
+                    state,
+                ) {
+                    Some(RegistryListResponse::Remove(id)) => {
+                        state.borrow_mut().registry.logics.remove(&id);
+                    }
+                    Some(RegistryListResponse::PaneResponse(response)) => {
+                        state.borrow_mut().response(response)
+                    }
+                    _ => {}
+                }
+            }
+            Pane::ScriptEditor { logic } => {
+                let Some(logic) = logic.upgrade() else {
+                    ui.heading("Script not found");
+                    return;
+                };
+
+                let name = logic.borrow().name.clone();
+                ui.heading(format!("Script: {}", name));
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut logic.borrow_mut().name);
+                });
+
+                ui.separator();
+
+                ScrollArea::both().show(ui, |ui| {
+                    let mut script = logic.borrow().script.clone();
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut script)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(30),
+                    );
+                    if response.changed() {
+                        logic.borrow_mut().script = script;
+                    }
+                });
+            }
         }
     }
 
@@ -324,6 +387,13 @@ impl Pane {
             Pane::AddressList => "Address list".into(),
             Pane::StructList => "Struct list".into(),
             Pane::ProcessList { matching: _ } => "Process list".into(),
+            Pane::ScriptList => "Script list".into(),
+            Pane::ScriptEditor { logic } => {
+                logic
+                    .upgrade()
+                    .map(|l| format!("Script: {}", l.borrow().name))
+                    .unwrap_or_else(|| "Script not found".into())
+            }
         }
     }
 }
@@ -334,6 +404,7 @@ pub enum PaneResponse {
     // TODO(emily): OpenAddress and OpenStruct can just be AddChild
     OpenAddress(Rc<RefCell<Address>>),
     OpenStruct(Rc<RefCell<Struct>>),
+    OpenScript(Rc<RefCell<Logic>>),
     ProcessSelected(Process),
     AddChild(AddChild),
     StructResponse(StructResponse),
@@ -353,6 +424,8 @@ pub enum AddChild {
     AddressList,
     StructList,
     ProcessList,
+    ScriptList,
+    ScriptEditor(Rc<RefCell<Logic>>),
 }
 
 #[derive(Debug)]

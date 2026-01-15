@@ -38,14 +38,3 @@ impl From<StructAction> for AddressResponse {
 pub(crate) struct StructUiFlags {
     pub(crate) top_level: bool,
 }
-
-// impl Default for Struct {
-//     fn default() -> Self {
-//         Self {
-//             layout: Default::default(),
-//             row_count: 8,
-//             nodes: Default::default(),
-//             name: "Default struct".into(),
-//         }
-//     }
-// }

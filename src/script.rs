@@ -1,7 +1,6 @@
-use rhai::{Engine, Scope};
-use crate::definition::Node;
-use crate::instance::LogicCallbacks;
+use crate::instance::logic_instance::{RhaiLogicNode, rhai_logic_node};
 use crate::memory::{Memory, RhaiMemory};
+use rhai::{Engine, Scope};
 
 pub struct ScriptEngine {
     pub(crate) engine: Engine,
@@ -26,6 +25,18 @@ impl ScriptEngine {
             .register_fn("read_u16", RhaiMemory::read_u16)
             .register_fn("read_u32", RhaiMemory::read_u32)
             .register_fn("read_u64", RhaiMemory::read_u64);
+
+        engine
+            .register_type_with_name::<RhaiLogicNode>("Node")
+            .register_fn("make_comment", rhai_logic_node::make_comment)
+            .register_fn("make_pointer", rhai_logic_node::make_pointer)
+            .register_fn("make_struct", rhai_logic_node::make_struct)
+            .register_fn("make_utf8", rhai_logic_node::make_utf8)
+            .register_fn("make_pointer_utf8", rhai_logic_node::make_pointer_utf8)
+            .register_fn("make_u64", rhai_logic_node::make_u64)
+            .register_fn("make_u32", rhai_logic_node::make_u32)
+            .register_fn("make_u16", rhai_logic_node::make_u16)
+            .register_fn("make_u8", rhai_logic_node::make_u8);
     }
 
     pub fn compile_logic_script(
@@ -33,7 +44,7 @@ impl ScriptEngine {
         script: &str,
         address: usize,
         memory: &mut Memory,
-    ) -> Result<(rhai::AST, LogicCallbacks), Box<rhai::EvalAltResult>> {
+    ) -> Result<(rhai::AST, rhai::Map), Box<rhai::EvalAltResult>> {
         let ast = self.engine.compile(script)?;
         let mut scope = rhai::Scope::new();
 
@@ -44,9 +55,7 @@ impl ScriptEngine {
         // Evaluate script to get the callbacks map
         let callbacks_map: rhai::Map = self.engine.eval_ast_with_scope(&mut scope, &ast)?;
 
-        let callbacks = LogicCallbacks::from_map(&callbacks_map)?;
-
-        Ok((ast, callbacks))
+        Ok((ast, callbacks_map))
     }
 
     pub fn evaluate(
@@ -57,27 +66,6 @@ impl ScriptEngine {
         // Evaluate script and return result as string
         // The string describes what node type to display
         self.engine.eval_with_scope::<String>(scope, script)
-    }
-}
-
-/// Parse comma-separated node types like "u8, u16, u32" or single type like "u64"
-pub fn parse_multiple_nodes(node_types: &str) -> Vec<Node> {
-    node_types
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .filter_map(parse_node_result)
-        .collect()
-}
-
-pub fn parse_node_result(node_type: &str) -> Option<Node> {
-    // Parse a single node type string into a Node
-    match node_type.to_lowercase().as_str() {
-        "u8" => Some(Node::U8),
-        "u16" => Some(Node::U16),
-        "u32" => Some(Node::U32),
-        "u64" => Some(Node::U64),
-        _ => None,
     }
 }
 

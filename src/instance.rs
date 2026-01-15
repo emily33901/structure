@@ -1,5 +1,5 @@
-mod logic_instance;
-mod struct_instance;
+pub mod logic_instance;
+pub mod struct_instance;
 
 pub use logic_instance::{LogicCallbacks, LogicInstance};
 pub use struct_instance::StructInstance;
@@ -18,7 +18,7 @@ use crate::{
     definition::Node,
     memory::{self, highlightable_address_text},
     node::StructUiFlags,
-    pane::AddressResponse,
+    pane::{AddressResponse, PaneResponse},
     registry::RegistryId,
     ui::{self, NODE_UNIT_ROW_HEIGHT},
 };
@@ -105,7 +105,14 @@ impl NodeInstance {
 
     fn row_count(&self, state: &RefCell<State>) -> usize {
         match &*self.definition.borrow() {
-            Node::U8 | Node::U16 | Node::U32 | Node::U64 | Node::Pointer(_) => 1,
+            Node::U8
+            | Node::U16
+            | Node::U32
+            | Node::U64
+            | Node::Utf8(_)
+            | Node::PointerUtf8(_)
+            | Node::Comment(_)
+            | Node::Pointer(_) => 1,
             Node::Struct(s) => s.upgrade().map(|s| s.borrow().row_count()).unwrap_or(1),
             Node::Logic(_) => {
                 let logic_instance = self.logic_instance(state).unwrap();
@@ -137,12 +144,12 @@ impl NodeInstance {
             let content_height: f32 = nodes
                 .iter()
                 .enumerate()
-                .map(|(idx, node_rc)| {
+                .map(|(_idx, (offset, node))| {
                     let node_instance = NodeInstance::new(
                         logic_instance.address,
-                        logic_instance.offset_in_parent + idx * 8, // Approximate offset
-                        logic_instance.location.progress(idx * 8),
-                        node_rc.clone(),
+                        *offset,
+                        logic_instance.location.progress(*offset),
+                        node.clone(),
                     );
                     node_instance.height(item_spacing_y, ctx, state) + item_spacing_y
                 })
@@ -342,9 +349,11 @@ impl NodeInstance {
 
                 ui.add_space(ui::spacing(ui));
 
-                // Display node count
-                let nodes = logic_instance.evaluate(state);
-                ui.label(format!("({} nodes)", nodes.len()));
+                if ui.button("Edit").clicked() {
+                    state
+                        .borrow_mut()
+                        .response(PaneResponse::OpenScript(logic_instance.definition()));
+                }
             },
         );
         collapsing
@@ -410,8 +419,8 @@ impl NodeInstance {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
             self.heading(ui, state);
 
-            let definition = self.definition.borrow();
-            let size = match &*definition {
+            let mut definition = self.definition.borrow_mut();
+            let size = match &mut *definition {
                 Node::U64 => {
                     ui.label("U64");
                     8
@@ -428,7 +437,22 @@ impl NodeInstance {
                     ui.label("U8");
                     1
                 }
-                Node::Logic(_) => unreachable!("Logic nodes handled separately"),
+                Node::Comment(comment) => {
+                    ui.text_edit_singleline(comment);
+                    return;
+                }
+                Node::Utf8(len) => {
+                    ui.label("Utf8");
+                    utf8_ui(ui, self.address, len, state);
+                    return;
+                }
+                Node::PointerUtf8(len) => {
+                    ui.label("Utf8");
+                    let address = state.borrow_mut().memory.read(self.address);
+
+                    utf8_ui(ui, address, len, state);
+                    return;
+                }
                 _ => unreachable!(),
             };
 
@@ -548,6 +572,13 @@ impl NodeInstance {
                     row_index,
                 ));
             }
+
+            if ui.button("Comment").clicked() {
+                return Some((Node::Comment(String::new()), row_index));
+            }
+
+            ui.separator();
+
             if ui.button("U64").clicked() {
                 return Some((Node::U64, row_index));
             }
@@ -559,6 +590,15 @@ impl NodeInstance {
             }
             if ui.button("U8").clicked() {
                 return Some((Node::U8, row_index));
+            }
+
+            ui.separator();
+
+            if ui.button("Utf8").clicked() {
+                return Some((Node::Utf8(16), row_index));
+            }
+            if ui.button("Pointer to utf8").clicked() {
+                return Some((Node::PointerUtf8(16), row_index));
             }
 
             None
@@ -584,4 +624,16 @@ pub(crate) fn none_ui_rules(bytes: usize) -> usize {
     } else {
         unreachable!()
     }
+}
+
+fn utf8_ui(ui: &mut egui::Ui, address: usize, len: &mut usize, state: &RefCell<State>) {
+    ui.add(egui::DragValue::new(len));
+
+    ui.add_space(ui::spacing(ui));
+
+    let mut buffer = vec![0_u8; *len];
+    state.borrow_mut().memory.get(address, &mut buffer);
+    let s = String::from_utf8_lossy(&buffer);
+
+    ui.label(s);
 }

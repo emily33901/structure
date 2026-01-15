@@ -3,9 +3,11 @@ use std::{
     rc::Rc,
 };
 
-use egui::{Align, Layout};
+use anyhow::{Result, bail};
 use egui::collapsing_header::CollapsingState;
+use egui::{Align, Layout};
 use egui_extras::Column;
+use rhai::Dynamic;
 
 use crate::{
     State,
@@ -15,29 +17,63 @@ use crate::{
 
 use super::{Location, NodeInstance};
 
+// Logic callbacks are the result of evaluating some script. These are rhai closures.
+// that hold state and return nodes, offsets, byte size etc of the struct that we are looking at.
+
 pub struct LogicCallbacks {
-    node_count: rhai::FnPtr,
+    ast: rhai::AST,
     byte_size: rhai::FnPtr,
-    get_node: rhai::FnPtr,
-    get_offset: rhai::FnPtr,
+    nodes: rhai::FnPtr,
 }
 
 impl LogicCallbacks {
-    pub fn from_map(map: &rhai::Map) -> Result<Self, Box<rhai::EvalAltResult>> {
-        let get_fn = |name: &str| -> Result<rhai::FnPtr, Box<rhai::EvalAltResult>> {
-            map.get(name)
-                .ok_or_else(|| format!("Missing callback: {}", name))?
-                .clone()
-                .try_cast::<rhai::FnPtr>()
-                .ok_or_else(|| format!("{} is not a function", name).into())
+    pub fn new(script: &str, address: usize, state: &RefCell<State>) -> Result<Self> {
+        let (ast, callbacks) = {
+            let mut state = state.borrow_mut();
+            match state
+                .script_engine
+                .compile_logic_script(&script, address, state.memory)
+            {
+                Ok(ok) => ok,
+                Err(err) => bail!("failed to evaluate script: {err:#?}"),
+            }
+        };
+
+        let get_fn = |name: &str| -> anyhow::Result<rhai::FnPtr> {
+            let Some(callback) = callbacks.get(name) else {
+                bail!("missing callback {name}");
+            };
+
+            let Some(fn_ptr) = callback.clone().try_cast::<rhai::FnPtr>() else {
+                bail!("map value {name} is not a function pointer");
+            };
+
+            Ok(fn_ptr)
         };
 
         Ok(Self {
-            node_count: get_fn("node_count")?,
+            ast,
             byte_size: get_fn("byte_size")?,
-            get_node: get_fn("get_node")?,
-            get_offset: get_fn("get_offset")?,
+            nodes: get_fn("nodes")?,
         })
+    }
+
+    fn byte_size(&self, state: &RefCell<State>) -> usize {
+        self.byte_size
+            .call::<i64>(&state.borrow().script_engine.engine, &self.ast, ())
+            .unwrap_or(0) as usize
+    }
+
+    fn nodes(&self, state: &RefCell<State>) -> Vec<RhaiLogicNode> {
+        let nodes = self
+            .nodes
+            .call::<Vec<Dynamic>>(&state.borrow().script_engine.engine, &self.ast, ())
+            .ok()
+            .unwrap_or_default();
+
+        let nodes: Vec<RhaiLogicNode> = nodes.into_iter().map(|dynamic| dynamic.cast()).collect();
+
+        nodes
     }
 }
 
@@ -48,12 +84,10 @@ pub struct LogicInstance {
     definition: Rc<RefCell<Logic>>,
 
     // Script evaluation results
-    callbacks: LogicCallbacks,
-    ast: rhai::AST,
+    callbacks: Result<LogicCallbacks>,
 
     // Within-frame caching
-    cached_nodes: RefCell<Option<Vec<Rc<RefCell<Node>>>>>,
-    cached_offsets: RefCell<Option<Vec<usize>>>,
+    cached_nodes: RefCell<Option<Vec<(usize, Rc<RefCell<Node>>)>>>,
 }
 
 impl LogicInstance {
@@ -64,14 +98,7 @@ impl LogicInstance {
         offset_in_parent: usize,
         state: &RefCell<State>,
     ) -> Self {
-        let script = definition.borrow().script.clone();
-        let (ast, callbacks) = {
-            let mut state_ref = state.borrow_mut();
-            state_ref
-                .script_engine
-                .compile_logic_script(&script, address, state_ref.memory)
-                .expect("Failed to compile logic script")
-        };
+        let callbacks = LogicCallbacks::new(&definition.borrow().script, address, state);
 
         Self {
             definition,
@@ -79,9 +106,7 @@ impl LogicInstance {
             location,
             address,
             callbacks,
-            ast,
             cached_nodes: Default::default(),
-            cached_offsets: Default::default(),
         }
     }
 
@@ -104,65 +129,32 @@ impl LogicInstance {
         })
     }
 
-    // Callback invocation methods
-    fn call_node_count(&self, state: &RefCell<State>) -> usize {
-        self.callbacks
-            .node_count
-            .call::<i64>(&state.borrow().script_engine.engine, &self.ast, ())
-            .unwrap_or(0) as usize
+    pub(super) fn definition(&self) -> Rc<RefCell<Logic>> {
+        self.definition.clone()
     }
 
-    fn call_byte_size(&self, state: &RefCell<State>) -> usize {
-        self.callbacks
-            .byte_size
-            .call::<i64>(&state.borrow().script_engine.engine, &self.ast, ())
-            .unwrap_or(0) as usize
-    }
+    pub(super) fn evaluate(&self, state: &RefCell<State>) -> Vec<(usize, Rc<RefCell<Node>>)> {
+        // TODO(emily): We do a lot of cloning here to fufil the definition of this function.
+        // We would probably prefer to borrow from the cached state that we have instead of
+        // cloning on every invocation. The clone are cheap however, so this is fine for now.
 
-    fn call_get_node(&self, state: &RefCell<State>, index: usize) -> Option<Node> {
-        let node_str: String = self
-            .callbacks
-            .get_node
-            .call(&state.borrow().script_engine.engine, &self.ast, (index as i64,))
-            .ok()?;
-        crate::script::parse_node_result(&node_str)
-    }
+        let Some(callbacks) = self.callbacks.as_ref().ok() else {
+            return vec![];
+        };
 
-    fn call_get_offset(&self, state: &RefCell<State>, index: usize) -> usize {
-        self.callbacks
-            .get_offset
-            .call::<i64>(&state.borrow().script_engine.engine, &self.ast, (index as i64,))
-            .unwrap_or(0) as usize
-    }
-
-    pub(super) fn evaluate(&self, state: &RefCell<State>) -> Vec<Rc<RefCell<Node>>> {
         if let Some(cached) = self.cached_nodes.borrow().as_ref() {
             return cached.clone();
         }
 
-        let node_count = self.call_node_count(state);
-
-        let mut nodes = Vec::with_capacity(node_count);
-        let mut offsets = Vec::with_capacity(node_count);
-
-        for i in 0..node_count {
-            if let Some(node) = self.call_get_node(state, i) {
-                offsets.push(self.call_get_offset(state, i));
-                nodes.push(Rc::new(RefCell::new(node)));
-            }
-        }
+        let nodes = callbacks.nodes(state);
+        let nodes: Vec<(usize, Rc<RefCell<Node>>)> = nodes
+            .into_iter()
+            .map(|node| node.as_node_offset(state))
+            .collect();
 
         *self.cached_nodes.borrow_mut() = Some(nodes.clone());
-        *self.cached_offsets.borrow_mut() = Some(offsets);
-        nodes
-    }
 
-    fn offset_for_row(&self, index: usize) -> usize {
-        self.cached_offsets
-            .borrow()
-            .as_ref()
-            .and_then(|offsets| offsets.get(index).copied())
-            .unwrap_or(0)
+        nodes
     }
 
     fn row_heights<'instance, 'state, 'state_owner>(
@@ -178,7 +170,6 @@ impl LogicInstance {
             nodes,
             state,
             cur_row: 0,
-            cur_offset: 0,
             item_spacing_y,
         }
     }
@@ -192,7 +183,11 @@ impl LogicInstance {
     }
 
     pub fn byte_size(&self, state: &RefCell<State>) -> usize {
-        self.call_byte_size(state)
+        let Some(callbacks) = self.callbacks.as_ref().ok() else {
+            return 0;
+        };
+
+        callbacks.byte_size(state)
     }
 
     pub fn ui(&self, ui: &mut egui::Ui, state: &RefCell<State>) {
@@ -200,7 +195,11 @@ impl LogicInstance {
         let nodes = self.evaluate(state);
 
         if nodes.is_empty() {
-            ui.colored_label(egui::Color32::YELLOW, "Script returned no nodes");
+            if let Err(err) = self.callbacks.as_ref() {
+                ui.colored_label(egui::Color32::RED, format!("{err:#}"));
+            } else {
+                ui.colored_label(egui::Color32::YELLOW, "Script returned no nodes");
+            }
             return;
         }
 
@@ -218,19 +217,15 @@ impl LogicInstance {
                 .body(|body| {
                     body.heterogeneous_rows(heights, |mut row| {
                         let index = row.index();
-                        let offset = self.offset_for_row(index);
+
+                        let (offset, node) = &nodes[index];
 
                         row.col(|ui| {
-                            if index >= nodes.len() {
-                                return;
-                            }
-
-                            let node_rc = &nodes[index];
                             let node_instance = NodeInstance::new(
                                 self.address + offset,
-                                self.offset_in_parent + offset,
-                                self.location.progress(offset),
-                                node_rc.clone(),
+                                *offset,
+                                self.location.progress(*offset),
+                                node.clone(),
                             );
 
                             node_instance.ui(ui, state);
@@ -244,10 +239,9 @@ impl LogicInstance {
 struct LogicRowHeightIterator<'instance, 'state, 'state_owner> {
     ctx: egui::Context,
     logic: &'instance LogicInstance,
-    nodes: Vec<Rc<RefCell<Node>>>,
+    nodes: Vec<(usize, Rc<RefCell<Node>>)>,
     state: &'state RefCell<State<'state_owner>>,
     cur_row: usize,
-    cur_offset: usize,
     item_spacing_y: f32,
 }
 
@@ -261,19 +255,143 @@ impl<'instance, 'state, 'state_owner> Iterator
             return None;
         }
 
-        let node_rc = &self.nodes[self.cur_row];
+        let (offset, node) = &self.nodes[self.cur_row];
         let node_instance = NodeInstance::new(
-            self.logic.address + self.cur_offset,
-            self.logic.offset_in_parent + self.cur_offset,
-            self.logic.location.progress(self.cur_offset),
-            node_rc.clone(),
+            self.logic.address + offset,
+            *offset,
+            self.logic.location.progress(*offset),
+            node.clone(),
         );
 
         let height = node_instance.height(self.item_spacing_y, &self.ctx, self.state);
 
-        self.cur_offset += node_rc.borrow().byte_size();
         self.cur_row += 1;
 
         Some(height)
+    }
+}
+
+#[derive(Clone)]
+pub enum RhaiLogicNodeKind {
+    U64,
+    U32,
+    U16,
+    U8,
+    Utf8(usize),
+    PointerUtf8(usize),
+    Comment(String),
+    Pointer(RegistryId),
+    Struct(RegistryId),
+}
+
+#[derive(Clone)]
+pub struct RhaiLogicNode {
+    kind: RhaiLogicNodeKind,
+    offset: usize,
+}
+
+impl RhaiLogicNode {
+    fn as_node_offset(&self, state: &RefCell<State>) -> (usize, Rc<RefCell<Node>>) {
+        (self.offset, Rc::new(RefCell::new(self.kind.as_node(state))))
+    }
+}
+
+impl RhaiLogicNodeKind {
+    fn as_node(&self, state: &RefCell<State>) -> Node {
+        match self {
+            RhaiLogicNodeKind::U64 => Node::U64,
+            RhaiLogicNodeKind::U32 => Node::U32,
+            RhaiLogicNodeKind::U16 => Node::U16,
+            RhaiLogicNodeKind::U8 => Node::U8,
+            RhaiLogicNodeKind::Utf8(len) => Node::Utf8(*len),
+            RhaiLogicNodeKind::PointerUtf8(len) => Node::PointerUtf8(*len),
+            RhaiLogicNodeKind::Comment(comment) => Node::Comment(comment.clone()),
+            RhaiLogicNodeKind::Pointer(id) => Node::Pointer(
+                state
+                    .borrow_mut()
+                    .registry
+                    .find_struct(id)
+                    .map(|s| Rc::downgrade(&s))
+                    .unwrap_or_default(),
+            ),
+            RhaiLogicNodeKind::Struct(id) => Node::Struct(
+                state
+                    .borrow_mut()
+                    .registry
+                    .find_struct(id)
+                    .map(|s| Rc::downgrade(&s))
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+}
+
+pub mod rhai_logic_node {
+    use crate::{
+        instance::logic_instance::{RhaiLogicNode, RhaiLogicNodeKind},
+        registry::RegistryId,
+    };
+
+    pub fn make_u64(offset: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::U64,
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_u32(offset: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::U64,
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_u16(offset: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::U64,
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_u8(offset: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::U64,
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_comment(offset: i64, comment: String) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::Comment(comment),
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_pointer(offset: i64, id: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::Pointer(RegistryId(id as usize)),
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_struct(offset: i64, id: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::Struct(RegistryId(id as usize)),
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_utf8(offset: i64, len: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::Utf8(len as usize),
+            offset: offset as usize,
+        }
+    }
+
+    pub fn make_pointer_utf8(offset: i64, len: i64) -> RhaiLogicNode {
+        RhaiLogicNode {
+            kind: RhaiLogicNodeKind::PointerUtf8(len as usize),
+            offset: offset as usize,
+        }
     }
 }

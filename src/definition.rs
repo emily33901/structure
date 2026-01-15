@@ -13,6 +13,9 @@ pub enum Node {
     U16,
     U32,
     U64,
+    Utf8(usize),
+    PointerUtf8(usize),
+    Comment(String),
     Struct(Weak<RefCell<Struct>>),
     Pointer(Weak<RefCell<Struct>>),
     Logic(Weak<RefCell<Logic>>),
@@ -129,7 +132,9 @@ impl Node {
             Self::U32 => 4,
             Self::U16 => 2,
             Self::U8 => 1,
-            Self::Pointer(_) => 8,
+            Self::Utf8(len) => *len,
+            Self::Comment(_) => 0,
+            Self::PointerUtf8(_) | Self::Pointer(_) => 8,
             Self::Struct(s) => s
                 .upgrade()
                 .map(|s| {

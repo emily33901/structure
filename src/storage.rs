@@ -22,6 +22,9 @@ mod v1 {
         U16,
         U32,
         U64,
+        Utf8(usize),
+        PointerUtf8(usize),
+        Comment(String),
         Struct(RegistryId),
         Pointer(RegistryId),
         Logic(RegistryId),
@@ -34,6 +37,9 @@ mod v1 {
                 Node::U16 => crate::definition::Node::U16,
                 Node::U32 => crate::definition::Node::U32,
                 Node::U64 => crate::definition::Node::U64,
+                Node::Utf8(len) => crate::definition::Node::Utf8(*len),
+                Node::PointerUtf8(len) => crate::definition::Node::PointerUtf8(*len),
+                Node::Comment(comment) => crate::definition::Node::Comment(comment.clone()),
                 Node::Struct(registry_id) => crate::definition::Node::Struct(Rc::downgrade(
                     registry.structs.get(registry_id).unwrap(),
                 )),
@@ -81,6 +87,10 @@ mod v1 {
         AddressList,
         ProcessList {
             matching: String,
+        },
+        ScriptList,
+        ScriptEditor {
+            logic: RegistryId,
         },
     }
 
@@ -190,6 +200,15 @@ mod v1 {
                     Pane::ProcessList { matching } => Some(crate::Pane::ProcessList {
                         matching: matching.into(),
                     }),
+                    Pane::ScriptList => Some(crate::Pane::ScriptList),
+                    Pane::ScriptEditor { logic } => {
+                        registry
+                            .logics
+                            .get(logic)
+                            .map(|l| crate::Pane::ScriptEditor {
+                                logic: Rc::downgrade(l),
+                            })
+                    }
                 }),
             };
 
@@ -209,6 +228,9 @@ impl v1::Node {
             crate::definition::Node::U16 => Some(Self::U16),
             crate::definition::Node::U32 => Some(Self::U32),
             crate::definition::Node::U64 => Some(Self::U64),
+            crate::definition::Node::Utf8(len) => Some(Self::Utf8(*len)),
+            crate::definition::Node::PointerUtf8(len) => Some(Self::PointerUtf8(*len)),
+            crate::definition::Node::Comment(comment) => Some(Self::Comment(comment.clone())),
             crate::definition::Node::Struct(s) => s
                 .upgrade()
                 .map(|s| Self::Struct(registry.struct_id(&s).unwrap())),
@@ -409,6 +431,12 @@ impl v1::Layout {
                 crate::Pane::ProcessList { matching } => Some(v1::Pane::ProcessList {
                     matching: matching.clone(),
                 }),
+                crate::Pane::ScriptList => Some(v1::Pane::ScriptList),
+                crate::Pane::ScriptEditor { logic } => {
+                    logic.upgrade().map(|l| v1::Pane::ScriptEditor {
+                        logic: registry.logic_id(&l).unwrap(),
+                    })
+                }
             }),
         };
 
